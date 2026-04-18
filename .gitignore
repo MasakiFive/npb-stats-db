@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# プロジェクト固有
+.venv/
+cache/
+data/*.db
+*.db-journal
+.vscode/
