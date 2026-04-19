@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}推移グラフ - NPB Stats DB{% endblock %}
+{% block content %}
+
+<!-- コントロールバー -->
+<div class="d-flex align-items-center flex-wrap gap-2 mb-3">
+  <h5 class="mb-0">推移グラフ</h5>
+  <select class="form-select form-select-sm w-auto"
+          onchange="location.href=this.value">
+    {% if snapshots %}
+      {% for s in snapshots %}
+      <option value="?snapshot_id={{ s.id }}&league={{ league }}"
+              {% if s.id == snapshot_id %}selected{% endif %}>
+        {{ s.stats_date }}（{{ s.year }}年）
+      </option>
+      {% endfor %}
+    {% else %}
+      <option>データなし</option>
+    {% endif %}
+  </select>
+  <div class="btn-group btn-group-sm">
+    <a href="?snapshot_id={{ snapshot_id }}&league=C"
+       class="btn {% if league == 'C' %}btn-primary{% else %}btn-outline-primary{% endif %}">セ</a>
+    <a href="?snapshot_id={{ snapshot_id }}&league=P"
+       class="btn {% if league == 'P' %}btn-danger{% else %}btn-outline-danger{% endif %}">パ</a>
+  </div>
+  <span class="text-muted small">最新スナップショットの上位10選手を表示</span>
+</div>
+
+{% if snapshots | length < 2 %}
+<div class="alert alert-info">
+  推移グラフには2件以上のスナップショットが必要です。
+  <code>python main.py --year 2026</code> を日を変えて複数回実行してください。
+</div>
+{% endif %}
+
+<div class="row g-3">
+
+  <!-- 打率の推移 -->
+  <div class="col-12 col-xl-6">
+    <div class="card">
+      <div class="card-header fw-semibold py-2">
+        打率の推移
+        <span class="text-muted fw-normal small ms-1">規定打席以上トップ10</span>
+      </div>
+      <div class="card-body">
+        <canvas id="battingChart" height="300"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 防御率の推移 -->
+  <div class="col-12 col-xl-6">
+    <div class="card">
+      <div class="card-header fw-semibold py-2">
+        防御率の推移
+        <span class="text-muted fw-normal small ms-1">規定投球回以上トップ10</span>
+      </div>
+      <div class="card-body">
+        <canvas id="eraChart" height="300"></canvas>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const battingData = {{ batting_data | safe }};
+  const eraData     = {{ era_data     | safe }};
+
+  const commonOptions = (yLabel) => ({
+    responsive: true,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { font: { size: 11 }, boxWidth: 12 }
+      }
+    },
+    scales: {
+      x: { ticks: { font: { size: 11 } } },
+      y: {
+        ticks: { font: { size: 11 } },
+        title: { display: true, text: yLabel, font: { size: 11 } }
+      }
+    }
+  });
+
+  if (battingData.labels.length > 0) {
+    new Chart(document.getElementById('battingChart'), {
+      type: 'line',
+      data: battingData,
+      options: commonOptions('打率')
+    });
+  } else {
+    document.getElementById('battingChart').closest('.card-body').innerHTML =
+      '<p class="text-muted small mb-0">データがありません。</p>';
+  }
+
+  if (eraData.labels.length > 0) {
+    // 防御率は低い方が優秀なので Y軸を反転
+    const opts = commonOptions('防御率');
+    opts.scales.y.reverse = true;
+    new Chart(document.getElementById('eraChart'), {
+      type: 'line',
+      data: eraData,
+      options: opts
+    });
+  } else {
+    document.getElementById('eraChart').closest('.card-body').innerHTML =
+      '<p class="text-muted small mb-0">データがありません。</p>';
+  }
+})();
+</script>
+{% endblock %}

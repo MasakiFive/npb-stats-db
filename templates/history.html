@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}歴代成績 - NPB Stats DB{% endblock %}
+{% block content %}
+
+<h5 class="mb-3">歴代成績（1950〜）</h5>
+
+{% if not seasons %}
+<div class="alert alert-info">
+  データがありません。先に <code>python seed.py</code> を実行してください。
+</div>
+{% else %}
+
+<!-- 優勝回数サマリー -->
+<div class="row g-3 mb-4">
+
+  {% macro count_card(title, rows, bar_color) %}
+  <div class="col-12 col-md-4">
+    <div class="card h-100">
+      <div class="card-header fw-semibold py-2">{{ title }}</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0 stats-table">
+          <thead>
+            <tr><th>チーム</th><th class="text-end">回数</th><th style="width:40%"></th></tr>
+          </thead>
+          <tbody>
+            {% set max_count = rows[0].count if rows else 1 %}
+            {% for row in rows %}
+            <tr>
+              <td>{{ row.team }}</td>
+              <td class="text-end fw-bold">{{ row.count }}</td>
+              <td>
+                <div class="progress" style="height:10px;">
+                  <div class="progress-bar bg-{{ bar_color }}"
+                       style="width:{{ (row.count / max_count * 100) | int }}%"></div>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endmacro %}
+
+  {{ count_card('セ・リーグ優勝回数',   cl_counts, 'primary') }}
+  {{ count_card('パ・リーグ優勝回数',   pl_counts, 'danger') }}
+  {{ count_card('日本シリーズ優勝回数', js_counts, 'warning') }}
+
+</div>
+
+<!-- 年度別成績 -->
+<div class="card">
+  <div class="card-header fw-semibold py-2 d-flex align-items-center gap-2">
+    年度別成績
+    <span class="text-muted fw-normal small">{{ seasons | length }} 年分</span>
+    <span class="text-muted fw-normal small ms-auto">
+      ※ 一部年度は要確認。誤りは <code>sql/seeds.sql</code> を直接編集してください。
+    </span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-scroll">
+      <table class="table table-sm table-hover table-bordered mb-0 stats-table">
+        <thead>
+          <tr>
+            <th>年度</th>
+            <th>セ優勝</th>
+            <th>パ優勝</th>
+            <th>CSセ</th>
+            <th>CSパ</th>
+            <th>日本一</th>
+            <th>備考</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in seasons %}
+          <tr>
+            <td class="fw-bold">{{ row.year }}</td>
+            <td>{{ row.central_champion    or '-' }}</td>
+            <td>{{ row.pacific_champion    or '-' }}</td>
+            <td class="text-muted">
+              {%- if row.cs_central_winner -%}
+                {%- if row.cs_central_winner != row.central_champion -%}
+                  <span class="text-danger fw-semibold">{{ row.cs_central_winner }}</span>
+                {%- else -%}
+                  {{ row.cs_central_winner }}
+                {%- endif -%}
+              {%- else -%}-{%- endif -%}
+            </td>
+            <td class="text-muted">
+              {%- if row.cs_pacific_winner -%}
+                {%- if row.cs_pacific_winner != row.pacific_champion -%}
+                  <span class="text-danger fw-semibold">{{ row.cs_pacific_winner }}</span>
+                {%- else -%}
+                  {{ row.cs_pacific_winner }}
+                {%- endif -%}
+              {%- else -%}-{%- endif -%}
+            </td>
+            <td class="fw-bold">
+              {%- if row.japan_series_winner -%}
+                {%- if row.japan_series_winner != row.central_champion
+                    and row.japan_series_winner != row.pacific_champion -%}
+                  <span class="text-danger">{{ row.japan_series_winner }}</span>
+                {%- else -%}
+                  {{ row.japan_series_winner }}
+                {%- endif -%}
+              {%- else -%}-{%- endif -%}
+            </td>
+            <td class="text-muted small">{{ row.notes or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<p class="text-muted small mt-2">
+  CS欄・日本一欄の <span class="text-danger fw-semibold">赤字</span> はリーグ優勝チーム以外が突破・制覇した年（下克上）を示します。
+</p>
+
+{% endif %}
+{% endblock %}

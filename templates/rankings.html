@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}ランキング - NPB Stats DB{% endblock %}
+{% block content %}
+
+<!-- コントロールバー -->
+<div class="d-flex align-items-center flex-wrap gap-2 mb-3">
+  <h5 class="mb-0">ランキング</h5>
+  <select class="form-select form-select-sm w-auto"
+          onchange="location.href=this.value">
+    {% if snapshots %}
+      {% for s in snapshots %}
+      <option value="?snapshot_id={{ s.id }}&league={{ league }}"
+              {% if s.id == snapshot_id %}selected{% endif %}>
+        {{ s.stats_date }}（{{ s.year }}年）
+      </option>
+      {% endfor %}
+    {% else %}
+      <option>データなし</option>
+    {% endif %}
+  </select>
+  <div class="btn-group btn-group-sm">
+    <a href="?snapshot_id={{ snapshot_id }}&league=C"
+       class="btn {% if league == 'C' %}btn-primary{% else %}btn-outline-primary{% endif %}">セ</a>
+    <a href="?snapshot_id={{ snapshot_id }}&league=P"
+       class="btn {% if league == 'P' %}btn-danger{% else %}btn-outline-danger{% endif %}">パ</a>
+  </div>
+</div>
+
+{% macro rtable(rows, cols) %}
+{% if rows %}
+<div class="table-scroll">
+  <table class="table table-sm table-hover table-bordered mb-0 stats-table">
+    <thead>
+      <tr>
+        <th style="width:2.5rem;">#</th>
+        {% for key, label in cols %}<th>{{ label }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="text-center fw-bold text-muted">{{ loop.index }}</td>
+        {% for key, label in cols %}
+        <td>{{ row[key] if row[key] is not none else '-' }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted p-3 mb-0 small">データがありません。</p>
+{% endif %}
+{% endmacro %}
+
+{% if not batting_top10 and not era_top10 %}
+<div class="alert alert-info">
+  データがありません。先に <code>python main.py --year 2026</code> を実行してください。
+</div>
+{% else %}
+
+<div class="row g-3">
+
+  <!-- 打率トップ10 -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header fw-semibold py-2">打率トップ10</div>
+      <div class="card-body p-0">
+        {{ rtable(batting_top10, [
+          ('player','選手'), ('team','球団'), ('batting_avg','打率'),
+          ('hits','安打'), ('at_bats','打数'),
+          ('home_runs','本塁打'), ('rbi','打点'), ('stolen_bases','盗塁')
+        ]) }}
+      </div>
+    </div>
+  </div>
+
+  <!-- 防御率トップ10 -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header fw-semibold py-2">防御率トップ10</div>
+      <div class="card-body p-0">
+        {{ rtable(era_top10, [
+          ('player','選手'), ('team','球団'), ('era','防御率'),
+          ('wins','勝'), ('losses','負'),
+          ('innings_pitched','投球回'), ('strikeouts','奪三振')
+        ]) }}
+      </div>
+    </div>
+  </div>
+
+  <!-- 奪三振ランキング -->
+  <div class="col-12 col-md-6 col-xl-4">
+    <div class="card h-100">
+      <div class="card-header fw-semibold py-2">奪三振ランキング</div>
+      <div class="card-body p-0">
+        {{ rtable(strikeout_top, [
+          ('player','選手'), ('team','球団'),
+          ('strikeouts','三振'), ('innings_pitched','投球回'), ('era','防御率')
+        ]) }}
+      </div>
+    </div>
+  </div>
+
+  <!-- 勝利数ランキング -->
+  <div class="col-12 col-md-6 col-xl-4">
+    <div class="card h-100">
+      <div class="card-header fw-semibold py-2">勝利数ランキング</div>
+      <div class="card-body p-0">
+        {{ rtable(wins_top, [
+          ('player','選手'), ('team','球団'),
+          ('wins','勝'), ('losses','負'),
+          ('era','防御率'), ('innings_pitched','投球回')
+        ]) }}
+      </div>
+    </div>
+  </div>
+
+  <!-- K/9ランキング -->
+  <div class="col-12 col-md-6 col-xl-4">
+    <div class="card h-100">
+      <div class="card-header fw-semibold py-2">
+        K/9（9回あたり奪三振）
+        <span class="text-muted fw-normal small ms-1">規定投球回以上</span>
+      </div>
+      <div class="card-body p-0">
+        {{ rtable(k9_top, [
+          ('player','選手'), ('team','球団'),
+          ('k_per_9','K/9'), ('strikeouts','三振'),
+          ('innings_pitched','投球回'), ('era','防御率')
+        ]) }}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endif %}
+{% endblock %}

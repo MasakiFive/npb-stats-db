@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - NPB Stats DB{% endblock %}
+{% block content %}
+
+<!-- コントロールバー -->
+<div class="d-flex align-items-center flex-wrap page-controls mb-3">
+  <h5 class="mb-0 me-2">{{ title }}</h5>
+
+  <!-- スナップショット選択 -->
+  <select class="form-select form-select-sm w-auto"
+          onchange="location.href=this.value">
+    {% if snapshots %}
+      {% for s in snapshots %}
+      <option value="?snapshot_id={{ s.id }}&league={{ league }}{% if current_position is defined and current_position %}&position={{ current_position }}{% endif %}"
+              {% if s.id == snapshot_id %}selected{% endif %}>
+        {{ s.stats_date }}（{{ s.year }}年）
+      </option>
+      {% endfor %}
+    {% else %}
+      <option>データなし</option>
+    {% endif %}
+  </select>
+
+  <!-- リーグ切替 -->
+  <div class="btn-group btn-group-sm">
+    <a href="?snapshot_id={{ snapshot_id }}&league=C{% if current_position is defined and current_position %}&position={{ current_position }}{% endif %}"
+       class="btn {% if league == 'C' %}btn-primary{% else %}btn-outline-primary{% endif %}">セ</a>
+    <a href="?snapshot_id={{ snapshot_id }}&league=P{% if current_position is defined and current_position %}&position={{ current_position }}{% endif %}"
+       class="btn {% if league == 'P' %}btn-danger{% else %}btn-outline-danger{% endif %}">パ</a>
+  </div>
+
+  <!-- ポジションフィルタ（個人守備のみ） -->
+  {% if positions is defined %}
+  <div class="btn-group btn-group-sm flex-wrap">
+    <a href="?snapshot_id={{ snapshot_id }}&league={{ league }}&position="
+       class="btn {% if not current_position %}btn-secondary{% else %}btn-outline-secondary{% endif %}">全て</a>
+    {% for pos in positions %}
+    <a href="?snapshot_id={{ snapshot_id }}&league={{ league }}&position={{ pos }}"
+       class="btn {% if current_position == pos %}btn-secondary{% else %}btn-outline-secondary{% endif %}">{{ pos }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <span class="text-muted small ms-auto">{{ rows | length }} 件</span>
+</div>
+
+<!-- テーブル -->
+{% if rows %}
+<div class="table-scroll">
+  <table class="table table-sm table-hover table-bordered mb-0 stats-table">
+    <thead>
+      <tr>
+        {% for key, label in cols %}
+        <th>{{ label }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        {% for key, label in cols %}
+        <td>{{ row[key] if row[key] is not none else '-' }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="alert alert-info">
+  データがありません。先に <code>python main.py --year 2026</code> を実行してください。
+</div>
+{% endif %}
+
+{% endblock %}

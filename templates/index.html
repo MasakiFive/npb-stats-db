@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}ダッシュボード - NPB Stats DB{% endblock %}
+{% block content %}
+
+{% macro rank_badge(change) %}
+  {%- if change is none -%}<span class="text-muted small">-</span>
+  {%- elif change > 0 -%}<span class="text-success fw-bold">↑{{ change }}</span>
+  {%- elif change < 0 -%}<span class="text-danger fw-bold">↓{{ change | abs }}</span>
+  {%- else -%}<span class="text-secondary">→</span>
+  {%- endif -%}
+{% endmacro %}
+
+<!-- DB概要 -->
+<div class="card mb-3">
+  <div class="card-header fw-semibold py-2">DB概要</div>
+  <div class="card-body py-2">
+    {% set labels = {
+      'snapshots': 'スナップショット',
+      'team_standings': '勝敗表',
+      'team_batting': 'チーム打撃',
+      'team_pitching': 'チーム投手',
+      'team_fielding': 'チーム守備',
+      'player_batting': '個人打撃',
+      'player_pitching': '個人投手',
+      'player_fielding': '個人守備'
+    } %}
+    <div class="row row-cols-2 row-cols-sm-4 row-cols-md-8 g-2">
+      {% for tbl, cnt in counts.items() %}
+      <div class="col">
+        <div class="border rounded text-center py-2 px-1 bg-white h-100">
+          <div class="text-muted" style="font-size:0.72rem;">{{ labels.get(tbl, tbl) }}</div>
+          <div class="fw-bold fs-5">{{ cnt }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- スナップショット選択 -->
+<div class="d-flex align-items-center gap-2 mb-3">
+  <span class="fw-semibold small">基準日：</span>
+  <select class="form-select form-select-sm w-auto"
+          onchange="location.href=this.value">
+    {% if snapshots %}
+      {% for s in snapshots %}
+      <option value="/?snapshot_id={{ s.id }}"
+              {% if s.id == snapshot_id %}selected{% endif %}>
+        {{ s.stats_date }}（{{ s.year }}年）
+      </option>
+      {% endfor %}
+    {% else %}
+      <option>データなし</option>
+    {% endif %}
+  </select>
+</div>
+
+{% if not c_standings and not p_standings %}
+<div class="alert alert-info">
+  データがありません。先に <code>python main.py --year 2026</code> を実行してください。
+</div>
+{% else %}
+
+<!-- 両リーグ順位表 -->
+<div class="row g-3">
+  {% for label, standings in [('セ・リーグ 順位表', c_standings), ('パ・リーグ 順位表', p_standings)] %}
+  <div class="col-12 col-xl-6">
+    <div class="card">
+      <div class="card-header fw-semibold py-2">{{ label }}</div>
+      <div class="card-body p-0">
+        {% if standings %}
+        <div class="table-scroll">
+          <table class="table table-sm table-hover mb-0 stats-table">
+            <thead>
+              <tr>
+                <th>順位</th>
+                <th>変動</th>
+                <th>チーム</th>
+                <th>試合</th>
+                <th>勝</th>
+                <th>負</th>
+                <th>分</th>
+                <th>勝率</th>
+                <th>ゲーム差</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in standings %}
+              <tr>
+                <td class="fw-bold text-center">{{ row.rank }}</td>
+                <td class="text-center">{{ rank_badge(row.rank_change) }}</td>
+                <td>{{ row.team }}</td>
+                <td class="text-end">{{ row.games }}</td>
+                <td class="text-end">{{ row.wins }}</td>
+                <td class="text-end">{{ row.losses }}</td>
+                <td class="text-end">{{ row.ties }}</td>
+                <td class="text-end">{{ row.win_pct }}</td>
+                <td class="text-end">{{ row.games_behind if row.games_behind is not none else '-' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="text-muted p-3 mb-0 small">データなし</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% endif %}
+{% endblock %}

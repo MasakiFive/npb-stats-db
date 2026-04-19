@@ -158,6 +158,16 @@ CREATE TABLE IF NOT EXISTS player_pitching (
     PRIMARY KEY (snapshot_id, league, player)
 );
 
+CREATE TABLE IF NOT EXISTS season_results (
+    year                INTEGER PRIMARY KEY,
+    central_champion    TEXT,           -- セ・リーグ優勝
+    pacific_champion    TEXT,           -- パ・リーグ優勝
+    cs_central_winner   TEXT,           -- CSセ勝者（2007年〜）
+    cs_pacific_winner   TEXT,           -- CSパ勝者（2007年〜）
+    japan_series_winner TEXT,           -- 日本シリーズ優勝
+    notes               TEXT            -- 当時のチーム名・備考
+);
+
 CREATE TABLE IF NOT EXISTS player_fielding (
     snapshot_id          INTEGER NOT NULL REFERENCES snapshots(id),
     league               TEXT    NOT NULL CHECK(league IN ('C','P')),
