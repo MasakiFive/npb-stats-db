@@ -62,13 +62,39 @@
     </div>
   </div>
 
+  <!-- セリーグ チーム順位の推移 -->
+  <div class="col-12 col-xl-6">
+    <div class="card">
+      <div class="card-header fw-semibold py-2">
+        セリーグ チーム順位の推移
+      </div>
+      <div class="card-body">
+        <canvas id="cStandingsChart" height="300"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- パリーグ チーム順位の推移 -->
+  <div class="col-12 col-xl-6">
+    <div class="card">
+      <div class="card-header fw-semibold py-2">
+        パリーグ チーム順位の推移
+      </div>
+      <div class="card-body">
+        <canvas id="pStandingsChart" height="300"></canvas>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script>
 (function () {
-  const battingData = {{ batting_data | safe }};
-  const eraData     = {{ era_data     | safe }};
+  const battingData    = {{ batting_data     | safe }};
+  const eraData        = {{ era_data         | safe }};
+  const cStandingsData = {{ c_standings_data | safe }};
+  const pStandingsData = {{ p_standings_data | safe }};
 
   const commonOptions = (yLabel) => ({
     responsive: true,
@@ -109,6 +135,40 @@
     });
   } else {
     document.getElementById('eraChart').closest('.card-body').innerHTML =
+      '<p class="text-muted small mb-0">データがありません。</p>';
+  }
+
+  const standingsOptions = (title) => {
+    const opts = commonOptions('順位');
+    opts.scales.y.reverse = true;
+    opts.scales.y.min = 1;
+    opts.scales.y.ticks = {
+      font: { size: 11 },
+      stepSize: 1,
+      callback: (v) => Number.isInteger(v) ? v + '位' : ''
+    };
+    return opts;
+  };
+
+  if (cStandingsData.labels.length > 0) {
+    new Chart(document.getElementById('cStandingsChart'), {
+      type: 'line',
+      data: cStandingsData,
+      options: standingsOptions('セリーグ')
+    });
+  } else {
+    document.getElementById('cStandingsChart').closest('.card-body').innerHTML =
+      '<p class="text-muted small mb-0">データがありません。</p>';
+  }
+
+  if (pStandingsData.labels.length > 0) {
+    new Chart(document.getElementById('pStandingsChart'), {
+      type: 'line',
+      data: pStandingsData,
+      options: standingsOptions('パリーグ')
+    });
+  } else {
+    document.getElementById('pStandingsChart').closest('.card-body').innerHTML =
       '<p class="text-muted small mb-0">データがありません。</p>';
   }
 })();

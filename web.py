@@ -181,6 +181,53 @@ def standings_with_rank_change(snapshot_id: int, league: str) -> list:
     return result
 
 
+def _standings_trend_json(league: str) -> str:
+    """リーグ内全チームの順位推移をChart.js JSON形式で返す。"""
+    db = get_db()
+
+    dates = [r["stats_date"] for r in db.execute(
+        "SELECT DISTINCT s.stats_date FROM team_standings t "
+        "JOIN snapshots s ON t.snapshot_id = s.id "
+        "WHERE t.league=? ORDER BY s.stats_date",
+        (league,)
+    ).fetchall()]
+
+    if not dates:
+        return json.dumps({"labels": [], "datasets": []})
+
+    teams = [r["team"] for r in db.execute(
+        "SELECT DISTINCT team FROM team_standings WHERE league=? ORDER BY team",
+        (league,)
+    ).fetchall()]
+
+    rows = db.execute(
+        "SELECT s.stats_date, t.team, t.rank "
+        "FROM team_standings t JOIN snapshots s ON t.snapshot_id = s.id "
+        "WHERE t.league=? ORDER BY s.stats_date",
+        (league,)
+    ).fetchall()
+
+    data_map: dict[str, dict] = {}
+    for row in rows:
+        data_map.setdefault(row["team"], {})[row["stats_date"]] = row["rank"]
+
+    datasets = []
+    for i, team in enumerate(teams):
+        color = _CHART_COLORS[i % len(_CHART_COLORS)]
+        datasets.append({
+            "label": team,
+            "data": [data_map.get(team, {}).get(d) for d in dates],
+            "borderColor": color,
+            "backgroundColor": color,
+            "fill": False,
+            "tension": 0.3,
+            "pointRadius": 4,
+            "spanGaps": False,
+        })
+
+    return json.dumps({"labels": dates, "datasets": datasets}, ensure_ascii=False)
+
+
 def _trend_json(table: str, stat_col: str, league: str) -> str:
     """最新スナップショット上位10選手の全スナップショット推移をChart.js JSON形式で返す。"""
     db = get_db()
@@ -407,6 +454,8 @@ def trends():
         nav_items=NAV_ITEMS,
         batting_data=_trend_json("player_batting", "batting_avg", league),
         era_data=_trend_json("player_pitching", "era", league),
+        c_standings_data=_standings_trend_json("C"),
+        p_standings_data=_standings_trend_json("P"),
     )
 
 
