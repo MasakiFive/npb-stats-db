@@ -59,9 +59,12 @@ def send_notification(subject: str, body: str) -> None:
 
 
 def main() -> None:
-    year = datetime.now().year
-    today = datetime.now().strftime("%Y-%m-%d")
-    print(f"=== NPB Stats Job 開始: {datetime.now().isoformat()} ===")
+    from zoneinfo import ZoneInfo
+    jst = ZoneInfo("Asia/Tokyo")
+    now_jst = datetime.now(jst)
+    year = now_jst.year
+    today = now_jst.strftime("%Y-%m-%d")
+    print(f"=== NPB Stats Job 開始: {now_jst.isoformat()} ===")
 
     download_db()
 
