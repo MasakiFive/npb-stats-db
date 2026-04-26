@@ -18,6 +18,8 @@ echo "=== Cloud Run Job を最新イメージに更新 ==="
 gcloud run jobs update ${JOB_NAME} \
   --image=${IMAGE_NAME}:latest \
   --region=${REGION} \
+  --update-env-vars="NOTIFY_EMAIL=mfujishiro49321@gmail.com" \
+  --update-secrets="GMAIL_USER=npb-gmail-user:latest,GMAIL_APP_PASSWORD=npb-gmail-app-password:latest" \
   --project=${PROJECT_ID}
 
 echo "更新完了。次回の Scheduler 実行から新しいイメージが使われます。"
