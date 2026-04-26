@@ -95,7 +95,7 @@ def main() -> None:
         sys.exit(result.returncode)
 
     upload_db()
-    print(f"=== NPB Stats Job 完了: {datetime.now().isoformat()} ===")
+    print(f"=== NPB Stats Job 完了: {datetime.now(jst).isoformat()} ===")
 
     send_notification(
         subject=f"[NPB] スクレイピング完了 {today}",
