@@ -1,23 +1,139 @@
 """NPB成績閲覧Webサーバー。
-起動: python web.py
-アクセス: http://localhost:5000
+ローカル: python web.py
+Cloud Run: gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 8 web:app
 """
-from flask import Flask, render_template, request, g
-import sqlite3
+import atexit
+import functools
 import json
+import os
+import threading
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-DB_PATH = Path(__file__).parent / "data" / "npb.db"
+from apscheduler.schedulers.background import BackgroundScheduler
+from authlib.integrations.flask_client import OAuth
+from flask import Flask, g, redirect, render_template, request, session, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+DB_PATH = Path(os.environ.get(
+    "NPB_DB_PATH",
+    str(Path(__file__).parent / "data" / "npb.db"),
+))
+GCS_BUCKET        = os.environ.get("GCS_BUCKET", "")
+GCS_DB_BLOB       = os.environ.get("GCS_DB_BLOB", "npb.db")
+ALLOWED_EMAIL     = os.environ.get("ALLOWED_EMAIL", "")
+_GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+_GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+
+_download_lock = threading.Lock()
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-insecure-key")
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+
+# ---------------------------------------------------------------------------
+# GCS ダウンロード
+# ---------------------------------------------------------------------------
+
+def _download_db_from_gcs() -> None:
+    """GCSから最新DBをダウンロードして差し替える。GCS_BUCKETが未設定なら何もしない。"""
+    if not GCS_BUCKET:
+        return
+    if not _download_lock.acquire(blocking=False):
+        print("[GCS] 既に更新中のためスキップ")
+        return
+    try:
+        from google.cloud import storage
+        blob = storage.Client().bucket(GCS_BUCKET).blob(GCS_DB_BLOB)
+        if not blob.exists():
+            print(f"[GCS] {GCS_DB_BLOB} が GCS に存在しません")
+            return
+        tmp = str(DB_PATH) + ".tmp"
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        blob.download_to_filename(tmp)
+        os.replace(tmp, str(DB_PATH))
+        print(f"[GCS] DB 更新完了: gs://{GCS_BUCKET}/{GCS_DB_BLOB}")
+    except Exception as e:
+        print(f"[GCS] DB 更新失敗: {e}")
+    finally:
+        _download_lock.release()
+
+
+_download_db_from_gcs()
+
+
+# ---------------------------------------------------------------------------
+# APScheduler: 毎日 9:00 JST に DB を更新
+# ---------------------------------------------------------------------------
+
+_scheduler = BackgroundScheduler(timezone=ZoneInfo("Asia/Tokyo"))
+_scheduler.add_job(_download_db_from_gcs, "cron", hour=9, minute=0)
+_scheduler.start()
+atexit.register(lambda: _scheduler.shutdown(wait=False))
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth
+# ---------------------------------------------------------------------------
+
+oauth = OAuth(app)
+if _GOOGLE_CLIENT_ID and _GOOGLE_CLIENT_SECRET:
+    oauth.register(
+        name="google",
+        client_id=_GOOGLE_CLIENT_ID,
+        client_secret=_GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+
+
+def login_required(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if not _GOOGLE_CLIENT_ID:
+            return f(*args, **kwargs)  # ローカル開発: 認証スキップ
+        if "user_email" not in session:
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route("/login")
+def login():
+    if not _GOOGLE_CLIENT_ID:
+        return redirect(url_for("index"))
+    return oauth.google.authorize_redirect(url_for("auth_callback", _external=True))
+
+
+@app.route("/auth/callback")
+def auth_callback():
+    token = oauth.google.authorize_access_token()
+    user_info = token.get("userinfo")
+    if not user_info:
+        return "認証情報の取得に失敗しました", 400
+    email = user_info.get("email", "")
+    if ALLOWED_EMAIL and email != ALLOWED_EMAIL:
+        return "アクセス権限がありません", 403
+    session["user_email"] = email
+    return redirect(url_for("index"))
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 # ---------------------------------------------------------------------------
 # DB接続
 # ---------------------------------------------------------------------------
 
-def get_db() -> sqlite3.Connection:
+def get_db() -> object:
     if "db" not in g:
+        import sqlite3
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         g.db = conn
@@ -305,6 +421,7 @@ def _render_stats(page, title, table, cols, order_by):
 # ---------------------------------------------------------------------------
 
 @app.route("/")
+@login_required
 def index():
     snap_list = all_snapshots()
     snapshot_id, _ = current_params()
@@ -324,41 +441,48 @@ def index():
 
 
 @app.route("/standings")
+@login_required
 def standings():
     return _render_stats("standings", "勝敗表", "team_standings", STANDINGS_COLS, "rank")
 
 
 @app.route("/team/batting")
+@login_required
 def team_batting():
     return _render_stats("team_batting", "チーム打撃", "team_batting",
                          TEAM_BATTING_COLS, "batting_avg DESC")
 
 
 @app.route("/team/pitching")
+@login_required
 def team_pitching():
     return _render_stats("team_pitching", "チーム投手", "team_pitching",
                          TEAM_PITCHING_COLS, "era")
 
 
 @app.route("/team/fielding")
+@login_required
 def team_fielding():
     return _render_stats("team_fielding", "チーム守備", "team_fielding",
                          TEAM_FIELDING_COLS, "fielding_avg DESC")
 
 
 @app.route("/player/batting")
+@login_required
 def player_batting():
     return _render_stats("player_batting", "個人打撃", "player_batting",
                          PLAYER_BATTING_COLS, "rank")
 
 
 @app.route("/player/pitching")
+@login_required
 def player_pitching():
     return _render_stats("player_pitching", "個人投手", "player_pitching",
                          PLAYER_PITCHING_COLS, "rank")
 
 
 @app.route("/player/fielding")
+@login_required
 def player_fielding():
     snap_list = all_snapshots()
     snapshot_id, league = current_params()
@@ -388,6 +512,7 @@ def player_fielding():
 
 
 @app.route("/rankings")
+@login_required
 def rankings():
     snap_list = all_snapshots()
     snapshot_id, league = current_params()
@@ -444,6 +569,7 @@ def rankings():
 
 
 @app.route("/trends")
+@login_required
 def trends():
     snap_list = all_snapshots()
     snapshot_id, league = current_params()
@@ -460,6 +586,7 @@ def trends():
 
 
 @app.route("/history")
+@login_required
 def history():
     db = get_db()
 
@@ -467,7 +594,6 @@ def history():
         "SELECT * FROM season_results ORDER BY year DESC"
     ).fetchall()
 
-    # チーム別集計（優勝回数）
     cl_counts = db.execute("""
         SELECT central_champion AS team, COUNT(*) AS count
         FROM season_results WHERE central_champion IS NOT NULL

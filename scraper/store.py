@@ -1,9 +1,13 @@
 """DataFrameをSQLiteに保存する層。"""
+import os
 import sqlite3
 from pathlib import Path
 import pandas as pd
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "npb.db"
+DB_PATH = Path(os.environ.get(
+    "NPB_DB_PATH",
+    str(Path(__file__).resolve().parent.parent / "data" / "npb.db"),
+))
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "sql" / "schema.sql"
 
 

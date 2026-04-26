@@ -1,7 +1,9 @@
 """週1で手動実行するメインスクリプト。
-使い方: python main.py --year 2026
+使い方: python main.py  # 当年を自動取得
+        python main.py --year 2025  # 年を指定する場合
 """
 import argparse
+from datetime import datetime
 from scraper.fetch import fetch
 from scraper.parse import (
     parse_stats_date,
@@ -77,6 +79,6 @@ def run(year: int) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--year", type=int, default=2026)
+    parser.add_argument("--year", type=int, default=datetime.now().year)
     args = parser.parse_args()
     run(args.year)

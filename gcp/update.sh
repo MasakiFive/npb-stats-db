@@ -6,7 +6,7 @@ PROJECT_ID="amplified-alpha-330603"
 REGION="asia-northeast1"
 REPO_NAME="npb-stats"
 IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/scraper"
-JOB_NAME="npb-stats-scraper"
+JOB_NAME="npb-stats-job"
 
 cd "$(dirname "$0")/.."
 

@@ -534,10 +534,99 @@ python web.py
 
 | 項目 | 内容 |
 |------|------|
-| スクレイパー実行頻度 | 週1回（手動） |
+| スクレイパー実行頻度 | 毎日自動（Cloud Scheduler: 毎朝8:00 JST） |
 | リクエスト間隔 | 2.5秒 |
 | キャッシュ有効期間 | 当日中（`cache/YYYYMMDD/` 単位） |
 | データ利用制限 | NPB公式利用規約に基づき個人ローカル利用に限定 |
-| DBファイル | `data/npb.db`（SQLite3） |
-| Webサーバー | Flask開発サーバー（`localhost:5000`）、個人ローカル利用 |
+| DBファイル | GCS: `gs://amplified-alpha-330603-npb-stats/npb.db`（SQLite3） |
+| Webサーバー | Cloud Run Service（Google OAuth 認証付き） |
 | シードデータ | `python seed.py` で初回のみ投入。修正は `sql/seeds.sql` を直接編集 |
+
+---
+
+## GCP 構成
+
+### アーキテクチャ
+
+```text
+Cloud Scheduler（毎朝 8:00 JST）
+    → Cloud Run Job（npb-stats-job）
+        ① GCS から npb.db をダウンロード
+        ② python main.py --year <当年> を実行（NPB スクレイピング）
+        ③ 更新した npb.db を GCS にアップロード
+
+GCS（npb.db 永続ストレージ）
+    ↓ 毎朝 9:00 JST（APScheduler）
+Cloud Run Service（npb-stats-web）
+    Flask + Google OAuth 認証
+```
+
+### GCP リソース一覧
+
+| リソース | 名前 | 説明 |
+| -------- | ---- | ---- |
+| GCS バケット | `amplified-alpha-330603-npb-stats` | DB 永続ストレージ |
+| Artifact Registry | `npb-stats`（asia-northeast1） | Docker イメージ管理 |
+| Cloud Run Job | `npb-stats-job` | スクレイパー実行コンテナ |
+| Cloud Run Service | `npb-stats-web` | Web ビューア |
+| Cloud Scheduler | `npb-stats-job-trigger` | 毎朝8:00 JST に Job を起動 |
+| Secret Manager | `npb-web-client-id` / `npb-web-client-secret` / `npb-web-secret-key` | OAuth 認証情報 |
+| サービスアカウント | `npb-stats-job@amplified-alpha-330603.iam.gserviceaccount.com` | Job・Service 共用 |
+
+### Cloud Run Job（スクレイパー）
+
+- **エントリーポイント**: `gcp_job.py`
+- **Dockerfile**: `Dockerfile`（CMD: `python gcp_job.py`）
+- **環境変数**: `GCS_BUCKET`, `GCS_DB_BLOB`
+- **対象年度**: `datetime.now().year` で自動取得（`--year` 引数で上書き可）
+
+### Cloud Run Service（Web ビューア）
+
+- **エントリーポイント**: `web.py`
+- **Dockerfile**: `Dockerfile.web`（gunicorn, 1 worker / 8 threads）
+- **環境変数**: `NPB_DB_PATH=/tmp/npb.db`, `GCS_BUCKET`, `ALLOWED_EMAIL`
+- **シークレット**: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `FLASK_SECRET_KEY`（Secret Manager）
+- **DB パス**: `/tmp/npb.db`（コンテナ内一時領域）
+
+#### DB 更新フロー
+
+| タイミング | 処理 |
+| --------- | ---- |
+| コンテナ起動時 | GCS から `/tmp/npb.db` をダウンロード |
+| 毎朝 9:00 JST | APScheduler が GCS から最新 DB を再ダウンロード |
+
+### 認証
+
+- Cloud Run Service は `--allow-unauthenticated`（ブラウザアクセス可）
+- Flask 内で **Google OAuth 2.0**（`authlib` 使用）
+- `ALLOWED_EMAIL` 環境変数で許可アカウントを制限（現在: `mfujishiro49321@gmail.com`）
+- ローカル開発時は `GOOGLE_CLIENT_ID` 未設定のため認証スキップ
+
+### デプロイスクリプト
+
+| スクリプト | 用途 |
+| --------- | ---- |
+| `gcp/setup.sh` | GCP リソースの初回セットアップ |
+| `gcp/deploy_web.sh` | Web サービスのビルド・デプロイ |
+| `gcp/update.sh` | スクレイパーイメージの更新・Job への反映 |
+
+#### Web サービスのデプロイ（コード変更時）
+
+```bash
+bash gcp/deploy_web.sh
+```
+
+#### スクレイパーのデプロイ（コード変更時）
+
+```bash
+bash gcp/update.sh
+```
+
+#### 初回セットアップ時の Secret Manager 登録
+
+```bash
+echo -n "CLIENT_ID"     | gcloud secrets create npb-web-client-id     --data-file=- --project=amplified-alpha-330603
+echo -n "CLIENT_SECRET" | gcloud secrets create npb-web-client-secret --data-file=- --project=amplified-alpha-330603
+python3 -c "import secrets; print(secrets.token_hex(32), end='')" \
+  | gcloud secrets create npb-web-secret-key --data-file=- --project=amplified-alpha-330603
+```
