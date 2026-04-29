@@ -317,7 +317,7 @@ def _standings_trend_json(league: str) -> str:
     ).fetchall()]
 
     rows = db.execute(
-        "SELECT s.stats_date, t.team, t.rank "
+        "SELECT s.stats_date, t.team, COALESCE(t.games_behind, 0) AS games_behind "
         "FROM team_standings t JOIN snapshots s ON t.snapshot_id = s.id "
         "WHERE t.league=? ORDER BY s.stats_date",
         (league,)
@@ -325,7 +325,7 @@ def _standings_trend_json(league: str) -> str:
 
     data_map: dict[str, dict] = {}
     for row in rows:
-        data_map.setdefault(row["team"], {})[row["stats_date"]] = row["rank"]
+        data_map.setdefault(row["team"], {})[row["stats_date"]] = row["games_behind"]
 
     datasets = []
     for i, team in enumerate(teams):
