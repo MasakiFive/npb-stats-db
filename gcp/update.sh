@@ -1,5 +1,6 @@
 #!/bin/bash
 # コード更新時: イメージを再ビルドして Cloud Run Job に反映する
+export PATH="$PATH:/snap/bin"
 set -e
 
 PROJECT_ID="amplified-alpha-330603"

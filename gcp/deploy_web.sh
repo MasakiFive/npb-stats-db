@@ -1,5 +1,6 @@
 #!/bin/bash
 # Web ビューアを Cloud Run Service にデプロイするスクリプト。
+export PATH="$PATH:/snap/bin"
 #
 # ============================================================
 # 【初回のみ】Secret Manager にシークレットを登録する
