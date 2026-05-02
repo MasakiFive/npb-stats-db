@@ -14,21 +14,30 @@ npb-stats-db/
 ├── main.py              # スクレイパーエントリーポイント
 ├── web.py               # Webサーバーエントリーポイント
 ├── seed.py              # 歴代成績シードデータ投入（初回のみ）
+├── gcp_job.py           # Cloud Run Job エントリーポイント
 ├── scraper/
 │   ├── __init__.py
 │   ├── fetch.py         # HTML取得・キャッシュ
 │   ├── parse.py         # HTML解析・DataFrame整形
 │   └── store.py         # SQLite保存
 ├── templates/
-│   ├── base.html        # 共通レイアウト（列ソートJS含む）
-│   ├── index.html       # ダッシュボード
-│   ├── stats.html       # 成績テーブル汎用ページ
-│   ├── rankings.html    # ランキングページ
-│   ├── trends.html      # 推移グラフページ
-│   └── history.html     # 歴代成績ページ
+│   ├── base.html                   # 共通レイアウト（列ソートJS含む）
+│   ├── index.html                  # ダッシュボード
+│   ├── stats.html                  # 成績テーブル汎用ページ
+│   ├── rankings.html               # ランキングページ
+│   ├── trends.html                 # 推移グラフページ
+│   ├── history.html                # 歴代成績ページ
+│   ├── hawks_batting.html          # ホークス試合別打撃成績
+│   ├── hawks_ranking.html          # ホークス打撃ランキング
+│   ├── hawks_pitching.html         # ホークス試合別投手成績
+│   └── hawks_pitching_ranking.html # ホークス投手ランキング
 ├── sql/
 │   ├── schema.sql       # テーブル定義
 │   └── seeds.sql        # 歴代優勝データ（1950〜）
+├── gcp/
+│   ├── setup.sh         # GCPリソース初回セットアップ
+│   ├── deploy_web.sh    # Webサービスデプロイ
+│   └── update.sh        # スクレイパーイメージ更新
 ├── data/
 │   └── npb.db           # SQLiteデータベース（自動生成）
 └── cache/
@@ -53,14 +62,19 @@ python main.py --year 2026
 
 **処理フロー**
 
-1. `init_db()` でスキーマを初期化（`IF NOT EXISTS` のため冪等）
+1. `init_db()` でスキーマを初期化・マイグレーション実行（冪等）
 2. `TARGETS` リストを順に処理
    - URLを構築して `fetch()` でHTML取得
    - `parse_stats_date()` でHTML内の成績基準日を抽出
    - `upsert_snapshot()` でスナップショットをコミット（FK制約のため先行）
    - 対応する `parse_*()` でDataFrame化
    - 対応する `save_*()` でDBへ保存
-3. 実行後に全テーブルの行数をコンソール出力
+3. `scrape_hawks_games(year, conn)` でホークス全試合のボックススコアを取得
+   - 3〜10月の月別スケジュールページからホークス試合URLを抽出
+   - 打撃・投手データが両方揃っている試合はスキップ（キャッシュ活用）
+   - 各ボックススコアから `parse_game_batting()` / `parse_game_pitching()` でDataFrame化
+   - `save_game_batting()` / `save_game_pitching()` でDBへ保存
+4. 実行後に全テーブルの行数をコンソール出力
 
 **TARGETS 定義**
 
@@ -142,6 +156,21 @@ python seed.py   # 初回のみ実行
 | `parse_player_batting(html, league)` | bat_c / bat_p | 個人打撃。選手名からチームコードを分離 |
 | `parse_player_pitching(html, league)` | pit_c / pit_p | 個人投手。先頭テーブル（規定投球回以上）のみ取得 |
 | `parse_player_fielding(html, league)` | fld_c / fld_p | 個人守備。`<h5>` 見出しでポジション別にテーブルを分割し全結合。ポジションを英略称（1B/2B/3B/SS/OF/C/P）で付与 |
+| `parse_schedule_game_urls(html, year)` | — | 月別スケジュールHTMLからホークス試合URL・日付・H/A・対戦相手を抽出 |
+| `parse_game_batting(html, home_away)` | — | ボックススコアHTMLからホークス打線のDataFrameを返す。打席結果列（1〜9）から本塁打数・打席数も算出 |
+| `parse_game_pitching(html, home_away)` | — | ボックススコアHTMLからホークス投手陣のDataFrameを返す。投球回は NPB 表記（`5.2` = 5と2/3回）を `float` に変換 |
+| `_parse_innings(val)` | — | NPB投球回表記（整数 or `N.1`/`N.2`）を浮動小数に変換するユーティリティ |
+
+#### ボックススコアのテーブル順序
+
+NPBボックススコア（`/scores/YYYY/MMDD/{away}-{home}-NN/box.html`）は以下の順でテーブルが並ぶ。
+
+| テーブル | home_away='H' | home_away='A' |
+| ------- | ------------ | ------------ |
+| 打撃テーブル[0] | ホークス（ホーム） | 相手（ホーム） |
+| 打撃テーブル[1] | 相手（アウェー） | ホークス（アウェー） |
+| 投手テーブル[0] | ホークス（ホーム） | 相手（ホーム） |
+| 投手テーブル[1] | 相手（アウェー） | ホークス（アウェー） |
 
 ---
 
@@ -159,7 +188,8 @@ python seed.py   # 初回のみ実行
 | 関数 | 説明 |
 |------|------|
 | `get_conn()` | SQLite接続を返す。`PRAGMA foreign_keys = ON` を設定 |
-| `init_db()` | `schema.sql` を実行してテーブルを初期化（冪等） |
+| `init_db()` | `schema.sql` を実行してテーブルを初期化し、`_migrate()` でカラム追加を適用（冪等） |
+| `_migrate(conn)` | `ALTER TABLE` によるカラム追加を冪等に適用。`game_pitching` の汚染行（投球回端数行）も除去 |
 | `upsert_snapshot(conn, year, stats_date)` | `snapshots` に `INSERT OR IGNORE` し、そのIDを返す。FK制約のため子テーブルのINSERT前に `commit()` を実施 |
 | `save_standings(conn, snapshot_id, df)` | `team_standings` に保存 |
 | `save_team_batting(conn, snapshot_id, df)` | `team_batting` に保存 |
@@ -168,13 +198,15 @@ python seed.py   # 初回のみ実行
 | `save_player_batting(conn, snapshot_id, df)` | `player_batting` に保存 |
 | `save_player_pitching(conn, snapshot_id, df)` | `player_pitching` に保存 |
 | `save_player_fielding(conn, snapshot_id, df)` | `player_fielding` に保存 |
+| `save_game_batting(conn, year, game_date, opponent, home_away, df)` | `game_batting` に保存。`DELETE WHERE year AND game_date` で再実行安全 |
+| `save_game_pitching(conn, year, game_date, opponent, home_away, df)` | `game_pitching` に保存。`DELETE WHERE year AND game_date` で再実行安全 |
 
 **保存処理の共通パターン**
 
 各 `save_*` 関数は以下の手順で冪等な書き込みを実現する。
 
-1. DataFrameに `snapshot_id` 列を追加
-2. `DELETE FROM {table} WHERE snapshot_id=? AND league=?` で既存データを削除（再実行時の二重登録防止）
+1. DataFrameに `snapshot_id`（またはゲーム系は `year`, `game_date` 等）の列を追加
+2. `DELETE FROM {table} WHERE ...` で既存データを削除（再実行時の二重登録防止）
 3. `DataFrame.to_sql(..., if_exists="append")` でINSERT
 
 ---
@@ -400,6 +432,58 @@ python seed.py   # 初回のみ実行
 
 ---
 
+### game_batting — ホークス試合別打撃成績
+
+ボックススコアから取得するスナップショット非依存テーブル。1試合ごとに DELETE → INSERT で上書きされる。
+
+| カラム | 型 | 説明 |
+|--------|----|------|
+| id | INTEGER | PK, AUTOINCREMENT |
+| year | INTEGER | 対象年度 |
+| game_date | DATE | 試合日 |
+| opponent | TEXT | 対戦相手チーム名 |
+| home_away | TEXT | `'H'`（本拠地）または `'A'`（ビジター） |
+| row_order | INTEGER | 打順行の表示順（ボックススコアの行番号） |
+| position | TEXT | 守備位置 |
+| player | TEXT | 選手名 |
+| at_bats | INTEGER | 打数 |
+| plate_appearances | INTEGER | 打席数（打席結果列の非 `-` セル数から算出） |
+| runs | INTEGER | 得点 |
+| hits | INTEGER | 安打 |
+| home_runs | INTEGER | 本塁打（打席結果列の「本」を含むセル数から算出） |
+| rbi | INTEGER | 打点 |
+| stolen_bases | INTEGER | 盗塁 |
+
+- インデックス: `game_date`
+
+---
+
+### game_pitching — ホークス試合別投手成績
+
+| カラム | 型 | 説明 |
+|--------|----|------|
+| id | INTEGER | PK, AUTOINCREMENT |
+| year | INTEGER | 対象年度 |
+| game_date | DATE | 試合日 |
+| opponent | TEXT | 対戦相手チーム名 |
+| home_away | TEXT | `'H'` または `'A'` |
+| row_order | INTEGER | 登板順 |
+| pitcher | TEXT | 投手名 |
+| result | TEXT | `'○'`（勝）/ `'●'`（負）/ `NULL`（なし） |
+| innings_pitched | REAL | 投球回（`5.333…` = 5と1/3回） |
+| batters_faced | INTEGER | 対戦打者数 |
+| hits | INTEGER | 被安打 |
+| home_runs | INTEGER | 被本塁打 |
+| strikeouts | INTEGER | 奪三振 |
+| walks | INTEGER | 四球 |
+| hit_by_pitch | INTEGER | 死球 |
+| runs | INTEGER | 失点 |
+| earned_runs | INTEGER | 自責点 |
+
+- インデックス: `game_date`
+
+---
+
 ### season_results — 歴代シーズン成績
 
 スクレイピングとは独立した静的参照テーブル。`seed.py` によって `sql/seeds.sql` から投入する。
@@ -443,11 +527,14 @@ snapshots (1)
     └── (N) player_pitching
     └── (N) player_fielding
 
-season_results  ← seeds.sql から独立投入（snapshots との FK なし）
+season_results   ← seeds.sql から独立投入（snapshots との FK なし）
+
+game_batting     ← ボックススコアから独立取得（snapshots との FK なし）
+game_pitching    ← ボックススコアから独立取得（snapshots との FK なし）
 ```
 
-スクレイピング系テーブルは `snapshot_id` で `snapshots` を参照する。
-同一 `stats_date` のデータが複数回実行された場合は DELETE → INSERT で上書きされる（再実行安全）。
+スクレイピング系テーブル（`team_*`, `player_*`）は `snapshot_id` で `snapshots` を参照する。
+`game_batting` / `game_pitching` はスナップショット管理とは独立しており、`(year, game_date)` を主キー相当として管理する。
 `season_results` は静的参照テーブルのため、スナップショット管理とは独立している。
 
 ---
@@ -483,6 +570,10 @@ python web.py
 | `/rankings` | ランキング | 打率/防御率/奪三振/勝利数/K9 の各トップ10 |
 | `/trends` | 推移グラフ | 打率・防御率の推移折れ線グラフ（Chart.js） |
 | `/history` | 歴代成績 | 1950年〜の年度別優勝チーム + チーム別優勝回数 |
+| `/hawks/batting` | ホークス打撃 | 試合別打撃成績（試合選択ドロップダウン） |
+| `/hawks/ranking` | ホークス打撃ランキング | 年間累積成績。規定打席（試合数×3.1）到達者に順位付け |
+| `/hawks/pitching` | ホークス投手 | 試合別投手成績（試合選択ドロップダウン） |
+| `/hawks/pitching/ranking` | ホークス投手ランキング | 年間累積成績。規定投球回（試合数×1.0）到達者に順位付け |
 
 **共通UIコントロール**
 

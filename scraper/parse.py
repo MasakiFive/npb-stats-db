@@ -451,3 +451,208 @@ def parse_player_fielding(html: str, league: str) -> pd.DataFrame:
     cols_out = ["league", "position", "player", "team", "rank", "fielding_avg",
                 "games", "putouts", "assists", "errors", "double_plays", "passed_balls"]
     return df[[c for c in cols_out if c in df.columns]]
+
+
+# ---------------------------------------------------------------------------
+# ホークス試合別打撃成績
+# ---------------------------------------------------------------------------
+
+TEAM_CODE_MAP = {
+    "h": "ソフトバンク", "e": "楽天", "l": "西武", "f": "日本ハム",
+    "m": "ロッテ", "bs": "オリックス", "g": "巨人", "t": "阪神",
+    "c": "広島", "d": "中日", "db": "ＤｅＮＡ", "s": "ヤクルト",
+}
+
+
+def parse_schedule_game_urls(html: str, year: int) -> list:
+    """月別スケジュールHTMLからホークス試合情報のリストを返す。
+    戻り値: [{'url': str, 'game_date': str, 'home_away': 'H'/'A', 'opponent': str}, ...]
+    """
+    results = []
+    seen: set[str] = set()
+    for m in re.finditer(r"/scores/(\d{4})/(\d{4})/([a-z]+)-([a-z]+)-(\d+)/", html):
+        yy, mmdd, away_code, home_code = m.group(1), m.group(2), m.group(3), m.group(4)
+        if away_code != "h" and home_code != "h":
+            continue
+        box_url = f"https://npb.jp{m.group(0)}box.html"
+        if box_url in seen:
+            continue
+        seen.add(box_url)
+        game_date = f"{yy}-{mmdd[:2]}-{mmdd[2:]}"
+        if away_code == "h":
+            home_away, opponent_code = "A", home_code
+        else:
+            home_away, opponent_code = "H", away_code
+        results.append({
+            "url": box_url,
+            "game_date": game_date,
+            "home_away": home_away,
+            "opponent": TEAM_CODE_MAP.get(opponent_code, opponent_code),
+        })
+    return results
+
+
+def parse_game_batting(html: str, home_away: str) -> pd.DataFrame:
+    """ボックススコアHTMLからホークス打線のDataFrameを返す。
+    NPBボックススコアはホームチームが先（テーブル[0]）、アウェーが後（テーブル[1]）。
+    home_away='H': ホーム（テーブル[0]）, 'A': アウェー（テーブル[1]）
+    """
+    tables = pd.read_html(StringIO(html))
+
+    batting_tables = []
+    for t in tables:
+        col_strs = [str(c) for c in t.columns]
+        if "打数" in col_strs and "安打" in col_strs:
+            batting_tables.append(t)
+
+    if not batting_tables:
+        raise ValueError("打撃テーブルが見つかりません")
+
+    idx = 0 if home_away == "H" else 1
+    if idx >= len(batting_tables):
+        raise ValueError(f"打撃テーブルが{idx + 1}個ありません（{len(batting_tables)}個）")
+    raw = batting_tables[idx].copy()
+
+    # 打席ごとの結果列（"1"〜"9"）から本塁打数・打席数を集計
+    ab_cols = [c for c in raw.columns if str(c) in {str(i) for i in range(1, 10)}]
+    if ab_cols:
+        home_runs_series = raw[ab_cols].apply(
+            lambda row: sum("本" in str(v) for v in row if pd.notna(v) and str(v) != "-"),
+            axis=1,
+        )
+        pa_series = raw[ab_cols].apply(
+            lambda row: sum(pd.notna(v) and str(v) not in {"-", "nan"} for v in row),
+            axis=1,
+        )
+    else:
+        home_runs_series = pd.Series(0, index=raw.index)
+        pa_series = pd.Series(0, index=raw.index)
+
+    col_map: dict = {}
+    for c in raw.columns:
+        s = str(c)
+        if s == "守備":
+            col_map[c] = "position"
+        elif s == "選手":
+            col_map[c] = "player"
+        elif s == "打数":
+            col_map[c] = "at_bats"
+        elif s == "得点":
+            col_map[c] = "runs"
+        elif s == "安打":
+            col_map[c] = "hits"
+        elif s == "打点":
+            col_map[c] = "rbi"
+        elif s == "盗塁":
+            col_map[c] = "stolen_bases"
+    df = raw.rename(columns=col_map)
+    df["home_runs"] = home_runs_series
+    df["plate_appearances"] = pa_series
+
+    needed = ["position", "player", "at_bats", "plate_appearances", "runs", "hits", "home_runs", "rbi", "stolen_bases"]
+    df = df[[c for c in needed if c in df.columns]].copy()
+
+    df = df.dropna(subset=["player"])
+    df["player"] = df["player"].astype(str)
+    df = df[~df["player"].str.contains(r"合計|チーム計|^計$", na=False)]
+    df = df[df["player"].str.strip().ne("") & df["player"].ne("nan")]
+    df = df.reset_index(drop=True)
+
+    for col in ["at_bats", "plate_appearances", "runs", "hits", "home_runs", "rbi", "stolen_bases"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+    return df
+
+
+def _parse_innings(val) -> float | None:
+    """NPB投球回表記（6, 5.1=5と1/3, 5.2=5と2/3）を浮動小数に変換。"""
+    if pd.isna(val):
+        return None
+    s = str(val).replace(" ", "").strip()
+    try:
+        v = float(s)
+        whole = int(v)
+        frac_digit = round((v - whole) * 10)  # 0, 1, 2
+        return whole + frac_digit / 3
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_game_pitching(html: str, home_away: str) -> pd.DataFrame:
+    """ボックススコアHTMLからホークス投手成績のDataFrameを返す。
+    NPBボックススコアはホームチームが先（テーブル[0]）、アウェーが後（テーブル[1]）。
+    """
+    tables = pd.read_html(StringIO(html))
+
+    pitching_tables = []
+    for t in tables:
+        col_strs = [str(c) for c in t.columns]
+        if "投球回" in col_strs and "三振" in col_strs:
+            pitching_tables.append(t)
+
+    if not pitching_tables:
+        raise ValueError("投手テーブルが見つかりません")
+
+    idx = 0 if home_away == "H" else 1
+    if idx >= len(pitching_tables):
+        raise ValueError(f"投手テーブルが{idx + 1}個ありません（{len(pitching_tables)}個）")
+    raw = pitching_tables[idx].copy()
+
+    col_map: dict = {}
+    for c in raw.columns:
+        s = str(c)
+        if s == "投手":
+            col_map[c] = "pitcher"
+        elif s == "投球回":
+            col_map[c] = "innings_pitched"
+        elif s in ("打者", "対打"):
+            col_map[c] = "batters_faced"
+        elif s == "安打":
+            col_map[c] = "hits"
+        elif s == "本塁打":
+            col_map[c] = "home_runs"
+        elif s == "三振":
+            col_map[c] = "strikeouts"
+        elif s == "四球":
+            col_map[c] = "walks"
+        elif s == "死球":
+            col_map[c] = "hit_by_pitch"
+        elif s == "失点":
+            col_map[c] = "runs"
+        elif s == "自責点":
+            col_map[c] = "earned_runs"
+        # 勝敗列（Unnamed: 0）は result として取得
+        elif s.startswith("Unnamed"):
+            col_map[c] = "result"
+    df = raw.rename(columns=col_map)
+
+    needed = ["pitcher", "result", "innings_pitched", "batters_faced",
+              "hits", "home_runs", "strikeouts", "walks", "hit_by_pitch",
+              "runs", "earned_runs"]
+    df = df[[c for c in needed if c in df.columns]].copy()
+
+    # pitcher が NaN の余分行（投球回の端数行等）を除去
+    df = df.dropna(subset=["pitcher"])
+    df["pitcher"] = df["pitcher"].astype(str)
+    df = df[~df["pitcher"].str.contains(r"チーム計|合計", na=False)]
+    df = df[df["pitcher"].str.strip().ne("") & df["pitcher"].ne("nan")]
+    # 投球回端数行（".1", ".2" 等）を除去
+    df = df[~df["pitcher"].str.match(r"^[\d.]+$")]
+    df = df.reset_index(drop=True)
+
+    if "innings_pitched" in df.columns:
+        df["innings_pitched"] = df["innings_pitched"].apply(_parse_innings)
+
+    # result: ○/● 以外は None に正規化
+    if "result" in df.columns:
+        df["result"] = df["result"].apply(
+            lambda v: str(v) if pd.notna(v) and str(v) in {"○", "●"} else None
+        )
+
+    for col in ["batters_faced", "hits", "home_runs", "strikeouts",
+                "walks", "hit_by_pitch", "runs", "earned_runs"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+    return df

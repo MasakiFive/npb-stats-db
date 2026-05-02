@@ -184,3 +184,43 @@ CREATE TABLE IF NOT EXISTS player_fielding (
     passed_balls         INTEGER,
     PRIMARY KEY (snapshot_id, league, position, player)
 );
+
+CREATE TABLE IF NOT EXISTS game_batting (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    year         INTEGER NOT NULL,
+    game_date    DATE    NOT NULL,
+    opponent     TEXT    NOT NULL,
+    home_away    TEXT    NOT NULL CHECK(home_away IN ('H','A')),
+    row_order    INTEGER NOT NULL,
+    position     TEXT,
+    player       TEXT    NOT NULL,
+    at_bats           INTEGER,
+    plate_appearances INTEGER,
+    runs              INTEGER,
+    hits              INTEGER,
+    home_runs         INTEGER,
+    rbi               INTEGER,
+    stolen_bases      INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_game_batting_date ON game_batting(game_date);
+
+CREATE TABLE IF NOT EXISTS game_pitching (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    year            INTEGER NOT NULL,
+    game_date       DATE    NOT NULL,
+    opponent        TEXT    NOT NULL,
+    home_away       TEXT    NOT NULL CHECK(home_away IN ('H','A')),
+    row_order       INTEGER NOT NULL,
+    pitcher         TEXT    NOT NULL,
+    result          TEXT,
+    innings_pitched REAL,
+    batters_faced   INTEGER,
+    hits            INTEGER,
+    home_runs       INTEGER,
+    strikeouts      INTEGER,
+    walks           INTEGER,
+    hit_by_pitch    INTEGER,
+    runs            INTEGER,
+    earned_runs     INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_game_pitching_date ON game_pitching(game_date);

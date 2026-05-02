@@ -251,7 +251,30 @@ NAV_ITEMS = [
     ("rankings",        "/rankings",        "ランキング"),
     ("trends",          "/trends",          "推移グラフ"),
     ("history",         "/history",         "歴代成績"),
+    ("hawks_batting",          "/hawks/batting",          "ホークス打撃"),
+    ("hawks_ranking",          "/hawks/ranking",          "打撃ランキング"),
+    ("hawks_pitching",         "/hawks/pitching",         "ホークス投手"),
+    ("hawks_pitching_ranking", "/hawks/pitching/ranking", "投手ランキング"),
 ]
+
+@app.template_filter("innings")
+def innings_filter(ip) -> str:
+    """投球回を NPB 表記（6, 5.1, 5.2）に変換。"""
+    if ip is None:
+        return "-"
+    try:
+        ip = float(ip)
+    except (ValueError, TypeError):
+        return "-"
+    whole = int(ip)
+    frac = ip - whole
+    if frac < 0.1:
+        return str(whole)
+    elif frac < 0.5:
+        return f"{whole}.1"
+    else:
+        return f"{whole}.2"
+
 
 _CHART_COLORS = [
     "#FF6384", "#36A2EB", "#FFCE56", "#4BC0C0", "#9966FF",
@@ -620,6 +643,240 @@ def history():
         cl_counts=cl_counts,
         pl_counts=pl_counts,
         js_counts=js_counts,
+    )
+
+
+@app.route("/hawks/ranking")
+@login_required
+def hawks_ranking():
+    from datetime import datetime as dt
+    db = get_db()
+    year = request.args.get("year", dt.now().year, type=int)
+
+    available_years = [
+        r["year"] for r in db.execute(
+            "SELECT DISTINCT year FROM game_batting ORDER BY year DESC"
+        ).fetchall()
+    ] or [year]
+
+    total_games = db.execute(
+        "SELECT COUNT(DISTINCT game_date) FROM game_batting WHERE year=?", (year,)
+    ).fetchone()[0] or 0
+    qualified_pa = total_games * 3.1
+
+    raw_rows = db.execute(
+        """
+        SELECT
+            player,
+            COUNT(DISTINCT game_date)               AS games,
+            SUM(at_bats)                            AS at_bats,
+            SUM(plate_appearances)                  AS total_pa,
+            SUM(hits)                               AS hits,
+            SUM(home_runs)                          AS home_runs,
+            SUM(runs)                               AS runs,
+            SUM(rbi)                                AS rbi,
+            SUM(stolen_bases)                       AS stolen_bases,
+            CASE WHEN SUM(at_bats) > 0
+                 THEN ROUND(CAST(SUM(hits) AS REAL) / SUM(at_bats), 3)
+                 ELSE NULL END                      AS batting_avg
+        FROM game_batting
+        WHERE year = ?
+        GROUP BY player
+        ORDER BY batting_avg DESC NULLS LAST, at_bats DESC
+        """,
+        (year,),
+    ).fetchall()
+
+    # 規定打席到達者のみ順位付け
+    rank = 1
+    rows = []
+    for r in raw_rows:
+        d = dict(r)
+        if d["total_pa"] is not None and d["total_pa"] >= qualified_pa:
+            d["rank"] = rank
+            rank += 1
+        else:
+            d["rank"] = None
+        rows.append(d)
+
+    return render_template(
+        "hawks_ranking.html",
+        page="hawks_ranking",
+        nav_items=NAV_ITEMS,
+        rows=rows,
+        year=year,
+        available_years=available_years,
+        qualified_pa=int(qualified_pa),
+    )
+
+
+@app.route("/hawks/pitching")
+@login_required
+def hawks_pitching():
+    from datetime import datetime as dt
+    db = get_db()
+    year = request.args.get("year", dt.now().year, type=int)
+    selected_date = request.args.get("date")
+
+    games = db.execute(
+        "SELECT DISTINCT game_date, opponent, home_away "
+        "FROM game_pitching WHERE year=? ORDER BY game_date DESC",
+        (year,),
+    ).fetchall()
+
+    if not selected_date and games:
+        selected_date = games[0]["game_date"]
+
+    rows = []
+    game_info = None
+    if selected_date:
+        info_row = db.execute(
+            "SELECT opponent, home_away FROM game_pitching "
+            "WHERE year=? AND game_date=? LIMIT 1",
+            (year, selected_date),
+        ).fetchone()
+        if info_row:
+            game_info = dict(info_row)
+        rows = db.execute(
+            "SELECT row_order, pitcher, result, innings_pitched, batters_faced, "
+            "hits, home_runs, strikeouts, walks, hit_by_pitch, runs, earned_runs "
+            "FROM game_pitching WHERE year=? AND game_date=? ORDER BY row_order",
+            (year, selected_date),
+        ).fetchall()
+
+    available_years = [
+        r["year"] for r in db.execute(
+            "SELECT DISTINCT year FROM game_pitching ORDER BY year DESC"
+        ).fetchall()
+    ] or [year]
+
+    return render_template(
+        "hawks_pitching.html",
+        page="hawks_pitching",
+        nav_items=NAV_ITEMS,
+        games=games,
+        selected_date=selected_date,
+        rows=rows,
+        game_info=game_info,
+        year=year,
+        available_years=available_years,
+    )
+
+
+@app.route("/hawks/pitching/ranking")
+@login_required
+def hawks_pitching_ranking():
+    from datetime import datetime as dt
+    db = get_db()
+    year = request.args.get("year", dt.now().year, type=int)
+
+    available_years = [
+        r["year"] for r in db.execute(
+            "SELECT DISTINCT year FROM game_pitching ORDER BY year DESC"
+        ).fetchall()
+    ] or [year]
+
+    total_games = db.execute(
+        "SELECT COUNT(DISTINCT game_date) FROM game_pitching WHERE year=?", (year,)
+    ).fetchone()[0] or 0
+    qualified_ip = total_games * 1.0
+
+    raw_rows = db.execute(
+        """
+        SELECT
+            pitcher,
+            COUNT(DISTINCT game_date)               AS games,
+            SUM(CASE WHEN result='○' THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN result='●' THEN 1 ELSE 0 END) AS losses,
+            SUM(innings_pitched)                    AS innings_pitched,
+            SUM(strikeouts)                         AS strikeouts,
+            SUM(walks)                              AS walks,
+            SUM(hits)                               AS hits,
+            SUM(home_runs)                          AS home_runs,
+            SUM(runs)                               AS runs,
+            SUM(earned_runs)                        AS earned_runs,
+            CASE WHEN SUM(innings_pitched) > 0
+                 THEN ROUND(SUM(earned_runs) * 9.0 / SUM(innings_pitched), 2)
+                 ELSE NULL END                      AS era
+        FROM game_pitching
+        WHERE year = ?
+        GROUP BY pitcher
+        ORDER BY era ASC NULLS LAST, innings_pitched DESC
+        """,
+        (year,),
+    ).fetchall()
+
+    rank = 1
+    rows = []
+    for r in raw_rows:
+        d = dict(r)
+        if d["innings_pitched"] is not None and d["innings_pitched"] >= qualified_ip:
+            d["rank"] = rank
+            rank += 1
+        else:
+            d["rank"] = None
+        rows.append(d)
+
+    return render_template(
+        "hawks_pitching_ranking.html",
+        page="hawks_pitching_ranking",
+        nav_items=NAV_ITEMS,
+        rows=rows,
+        year=year,
+        available_years=available_years,
+        qualified_ip=int(qualified_ip),
+    )
+
+
+@app.route("/hawks/batting")
+@login_required
+def hawks_batting():
+    from datetime import datetime as dt
+    db = get_db()
+    year = request.args.get("year", dt.now().year, type=int)
+    selected_date = request.args.get("date")
+
+    games = db.execute(
+        "SELECT DISTINCT game_date, opponent, home_away "
+        "FROM game_batting WHERE year=? ORDER BY game_date DESC",
+        (year,),
+    ).fetchall()
+
+    if not selected_date and games:
+        selected_date = games[0]["game_date"]
+
+    rows = []
+    game_info = None
+    if selected_date:
+        info_row = db.execute(
+            "SELECT opponent, home_away FROM game_batting "
+            "WHERE year=? AND game_date=? LIMIT 1",
+            (year, selected_date),
+        ).fetchone()
+        if info_row:
+            game_info = dict(info_row)
+        rows = db.execute(
+            "SELECT row_order, position, player, at_bats, runs, hits, rbi, stolen_bases "
+            "FROM game_batting WHERE year=? AND game_date=? ORDER BY row_order",
+            (year, selected_date),
+        ).fetchall()
+
+    available_years = [
+        r["year"] for r in db.execute(
+            "SELECT DISTINCT year FROM game_batting ORDER BY year DESC"
+        ).fetchall()
+    ] or [year]
+
+    return render_template(
+        "hawks_batting.html",
+        page="hawks_batting",
+        nav_items=NAV_ITEMS,
+        games=games,
+        selected_date=selected_date,
+        rows=rows,
+        game_info=game_info,
+        year=year,
+        available_years=available_years,
     )
 
 

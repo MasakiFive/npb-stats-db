@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}ホークス打撃ランキング - NPB Stats DB{% endblock %}
+{% block content %}
+
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><a class="nav-link"           href="/hawks/batting?year={{ year }}">試合別打撃</a></li>
+  <li class="nav-item"><a class="nav-link active"   href="/hawks/ranking?year={{ year }}">打撃ランキング</a></li>
+  <li class="nav-item"><a class="nav-link"           href="/hawks/pitching?year={{ year }}">試合別投手</a></li>
+  <li class="nav-item"><a class="nav-link"           href="/hawks/pitching/ranking?year={{ year }}">投手ランキング</a></li>
+</ul>
+
+<div class="d-flex align-items-center flex-wrap gap-2 mb-3">
+  <h5 class="mb-0">ホークス打撃ランキング</h5>
+
+  {% if available_years | length > 1 %}
+  <select class="form-select form-select-sm w-auto"
+          onchange="location.href='?year='+this.value">
+    {% for y in available_years %}
+    <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}年</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+
+  <span class="text-muted small">{{ year }}年・規定打席 {{ qualified_pa }} 以上で順位付け（列ヘッダークリックでソート）</span>
+</div>
+
+{% if not rows %}
+<div class="alert alert-info">
+  データがありません。<code>python main.py --year {{ year }}</code> を実行してください。
+</div>
+{% else %}
+<div class="table-scroll">
+  <table class="table table-hover table-bordered stats-table mb-0">
+    <thead>
+      <tr>
+        <th>順位</th>
+        <th>選手</th>
+        <th>試合</th>
+        <th>打席</th>
+        <th>打数</th>
+        <th>安打</th>
+        <th>本塁打</th>
+        <th>打率</th>
+        <th>得点</th>
+        <th>打点</th>
+        <th>盗塁</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr {% if r.rank is none %}class="text-muted"{% endif %}>
+        <td class="text-end">{{ r.rank if r.rank is not none else '-' }}</td>
+        <td>{{ r.player }}</td>
+        <td class="text-end">{{ r.games }}</td>
+        <td class="text-end">{{ r.total_pa or '-' }}</td>
+        <td class="text-end">{{ r.at_bats or '-' }}</td>
+        <td class="text-end">{{ r.hits or '-' }}</td>
+        <td class="text-end">{{ r.home_runs or '-' }}</td>
+        <td class="text-end">
+          {% if r.batting_avg is not none %}{{ "%.3f" % r.batting_avg }}{% else %}-{% endif %}
+        </td>
+        <td class="text-end">{{ r.runs or '-' }}</td>
+        <td class="text-end">{{ r.rbi or '-' }}</td>
+        <td class="text-end">{{ r.stolen_bases or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="text-muted small mt-2">※規定打席未満の選手はグレー表示・順位なし。</p>
+{% endif %}
+
+{% endblock %}

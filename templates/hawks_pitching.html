@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}ホークス投手成績 - NPB Stats DB{% endblock %}
+{% block content %}
+
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><a class="nav-link"           href="/hawks/batting?year={{ year }}">試合別打撃</a></li>
+  <li class="nav-item"><a class="nav-link"           href="/hawks/ranking?year={{ year }}">打撃ランキング</a></li>
+  <li class="nav-item"><a class="nav-link active"   href="/hawks/pitching?year={{ year }}">試合別投手</a></li>
+  <li class="nav-item"><a class="nav-link"           href="/hawks/pitching/ranking?year={{ year }}">投手ランキング</a></li>
+</ul>
+
+<div class="d-flex align-items-center flex-wrap gap-2 mb-3">
+  <h5 class="mb-0">ホークス投手成績</h5>
+
+  {% if available_years | length > 1 %}
+  <select class="form-select form-select-sm w-auto"
+          onchange="location.href='?year='+this.value">
+    {% for y in available_years %}
+    <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}年</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+
+  <select class="form-select form-select-sm w-auto"
+          onchange="location.href='?year={{ year }}&date='+this.value">
+    {% if games %}
+      {% for g in games %}
+      <option value="{{ g.game_date }}"
+              {% if g.game_date == selected_date %}selected{% endif %}>
+        {{ g.game_date }}
+        {% if g.home_away == 'H' %}vs{% else %}@{% endif %}
+        {{ g.opponent }}
+      </option>
+      {% endfor %}
+    {% else %}
+      <option>データなし</option>
+    {% endif %}
+  </select>
+</div>
+
+{% if not games %}
+<div class="alert alert-info">
+  データがありません。<code>python main.py --year {{ year }}</code> を実行してください。
+</div>
+{% elif rows %}
+  {% if game_info %}
+  <p class="text-muted small mb-2">
+    {{ selected_date }}
+    {% if game_info.home_away == 'H' %}vs {{ game_info.opponent }}（ホーム）
+    {% else %}@ {{ game_info.opponent }}（ビジター）{% endif %}
+  </p>
+  {% endif %}
+
+  <div class="table-scroll">
+    <table class="table table-hover table-bordered stats-table mb-0">
+      <thead>
+        <tr>
+          <th>投手</th>
+          <th>結果</th>
+          <th>投球回</th>
+          <th>打者</th>
+          <th>被安打</th>
+          <th>被本塁打</th>
+          <th>奪三振</th>
+          <th>四球</th>
+          <th>死球</th>
+          <th>失点</th>
+          <th>自責点</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.pitcher }}</td>
+          <td class="text-center fw-bold
+            {% if r.result == '○' %}text-primary{% elif r.result == '●' %}text-danger{% endif %}">
+            {{ r.result or '' }}
+          </td>
+          <td class="text-end">{{ r.innings_pitched | innings }}</td>
+          <td class="text-end">{{ r.batters_faced if r.batters_faced is not none else '-' }}</td>
+          <td class="text-end">{{ r.hits if r.hits is not none else '-' }}</td>
+          <td class="text-end">{{ r.home_runs if r.home_runs is not none else '-' }}</td>
+          <td class="text-end">{{ r.strikeouts if r.strikeouts is not none else '-' }}</td>
+          <td class="text-end">{{ r.walks if r.walks is not none else '-' }}</td>
+          <td class="text-end">{{ r.hit_by_pitch if r.hit_by_pitch is not none else '-' }}</td>
+          <td class="text-end">{{ r.runs if r.runs is not none else '-' }}</td>
+          <td class="text-end">{{ r.earned_runs if r.earned_runs is not none else '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+<div class="alert alert-warning">選択した試合のデータがありません。</div>
+{% endif %}
+
+{% endblock %}

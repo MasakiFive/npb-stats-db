@@ -67,6 +67,7 @@ python web.py
 | 個人 | bat_c / bat_p | 打撃ランキング（規定打席以上） |
 | 個人 | pit_c / pit_p | 投手ランキング（規定投球回以上） |
 | 個人 | fld_c / fld_p | 守備ランキング（全ポジション） |
+| ホークス | ボックススコア | 試合別打撃・投手成績（一軍全試合） |
 
 ## Web ページ一覧
 
@@ -83,6 +84,10 @@ python web.py
 | `/rankings` | 打率/防御率/奪三振/勝利数/K9 トップ10 |
 | `/trends` | 打率・防御率・チーム順位の推移グラフ |
 | `/history` | 歴代優勝チーム・優勝回数（1950〜） |
+| `/hawks/batting` | ホークス試合別打撃成績 |
+| `/hawks/ranking` | ホークス打撃ランキング（規定打席順位付き） |
+| `/hawks/pitching` | ホークス試合別投手成績 |
+| `/hawks/pitching/ranking` | ホークス投手ランキング（規定投球回順位付き） |
 
 ## DB 構造
 
@@ -90,6 +95,8 @@ python web.py
 - `team_standings` / `team_batting` / `team_pitching` / `team_fielding`：チーム成績
 - `player_batting` / `player_pitching` / `player_fielding`：個人成績
 - `season_results`：歴代シーズン優勝データ（seed.py で投入、スナップショットと独立）
+- `game_batting`：ホークス試合別打撃成績（ボックススコアから取得）
+- `game_pitching`：ホークス試合別投手成績（ボックススコアから取得）
 
 ## よく使うクエリ
 

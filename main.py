@@ -3,7 +3,7 @@
         python main.py --year 2025  # 年を指定する場合
 """
 import argparse
-from datetime import datetime
+from datetime import datetime, date
 from scraper.fetch import fetch
 from scraper.parse import (
     parse_stats_date,
@@ -14,6 +14,9 @@ from scraper.parse import (
     parse_player_batting,
     parse_player_pitching,
     parse_player_fielding,
+    parse_schedule_game_urls,
+    parse_game_batting,
+    parse_game_pitching,
 )
 from scraper.store import (
     get_conn,
@@ -26,6 +29,8 @@ from scraper.store import (
     save_player_batting,
     save_player_pitching,
     save_player_fielding,
+    save_game_batting,
+    save_game_pitching,
 )
 
 # (league, url_path, parse_fn, save_fn, 表示ラベル)
@@ -55,7 +60,58 @@ TABLES = [
     "player_batting",
     "player_pitching",
     "player_fielding",
+    "game_batting",
+    "game_pitching",
 ]
+
+
+def scrape_hawks_games(year: int, conn) -> None:
+    """ホークスの全試合ボックススコアを取得して game_batting に保存する。"""
+    today = date.today().isoformat()
+    batting_dates = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT game_date FROM game_batting WHERE year=?", (year,)
+        ).fetchall()
+    }
+    pitching_dates = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT game_date FROM game_pitching WHERE year=?", (year,)
+        ).fetchall()
+    }
+    existing_dates = batting_dates & pitching_dates  # 両方揃っている試合のみスキップ
+
+    total = 0
+    for month in range(3, 11):
+        schedule_url = f"https://npb.jp/games/{year}/schedule_{month:02d}_detail.html"
+        try:
+            html = fetch(schedule_url)
+        except Exception as e:
+            print(f"[ホークス] {month}月スケジュール取得失敗: {e}")
+            continue
+
+        games = parse_schedule_game_urls(html, year)
+        for game in games:
+            if game["game_date"] > today:
+                continue  # 未来の試合はスキップ
+            if game["game_date"] in existing_dates:
+                continue  # 取得済みはスキップ
+            try:
+                box_html = fetch(game["url"])
+                bat_df = parse_game_batting(box_html, game["home_away"])
+                pit_df = parse_game_pitching(box_html, game["home_away"])
+                save_game_batting(conn, year, game["game_date"],
+                                  game["opponent"], game["home_away"], bat_df)
+                save_game_pitching(conn, year, game["game_date"],
+                                   game["opponent"], game["home_away"], pit_df)
+                conn.commit()
+                existing_dates.add(game["game_date"])
+                total += len(bat_df)
+                print(f"[ホークス] {game['game_date']} vs {game['opponent']}"
+                      f" ({game['home_away']}) 打撃{len(bat_df)}行 投手{len(pit_df)}行")
+            except Exception as e:
+                print(f"[ホークス] {game['game_date']} vs {game['opponent']} 失敗: {e}")
+
+    print(f"[ホークス] 打撃成績 新規追加 {total} 行")
 
 
 def run(year: int) -> None:
@@ -70,6 +126,9 @@ def run(year: int) -> None:
             df = parse_fn(html, league)
             save_fn(conn, snapshot_id, df)
             print(f"[OK] {league}リーグ {label} ({stats_date}) -> {len(df)} 行")
+
+        print("\n[ホークス] 試合別打撃成績を取得中...")
+        scrape_hawks_games(year, conn)
 
         print("\n--- テーブル別行数 ---")
         for table in TABLES:
