@@ -18,7 +18,7 @@ echo "=== Cloud Run Job を最新イメージに更新 ==="
 gcloud run jobs update ${JOB_NAME} \
   --image=${IMAGE_NAME}:latest \
   --region=${REGION} \
-  --update-env-vars="NOTIFY_EMAIL=mfujishiro49321@gmail.com" \
+  --update-env-vars="NOTIFY_EMAIL=mfujishiro49321@gmail.com,WEB_URL=https://npb-stats-web-p5ledlcpvq-an.a.run.app" \
   --update-secrets="GMAIL_USER=npb-gmail-user:latest,GMAIL_APP_PASSWORD=npb-gmail-app-password:latest" \
   --project=${PROJECT_ID}
 

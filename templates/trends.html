@@ -138,10 +138,50 @@
       '<p class="text-muted small mb-0">データがありません。</p>';
   }
 
+  const TEAM_COLOR_MAP = [
+    { keywords: ['巨人', '読売', 'ジャイアンツ'],          color: '#FF8C00' },
+    { keywords: ['阪神', 'タイガース'],                     color: '#F5C518' },
+    { keywords: ['広島', 'カープ'],                         color: '#DC143C' },
+    { keywords: ['中日', 'ドラゴンズ'],                     color: '#1E5FAD' },
+    { keywords: ['ＤｅＮＡ', 'DeNA', 'ベイスターズ', '横浜'], color: '#00BFFF' },
+    { keywords: ['ヤクルト', 'スワローズ'],                 color: '#228B22' },
+    { keywords: ['ソフトバンク', 'ホークス'],               color: '#F5C518' },
+    { keywords: ['日本ハム', 'ファイターズ'],               color: '#00BFFF' },
+    { keywords: ['オリックス', 'バファローズ'],             color: '#1E3A6E' },
+    { keywords: ['ロッテ', 'マリーンズ'],                   color: '#333333' },
+    { keywords: ['西武', 'ライオンズ'],                     color: '#50C878' },
+    { keywords: ['楽天', 'イーグルス'],                     color: '#8B0000' },
+  ];
+
+  function getTeamColor(name) {
+    for (const { keywords, color } of TEAM_COLOR_MAP) {
+      if (keywords.some(k => name.includes(k))) return color;
+    }
+    return '#999999';
+  }
+
+  function applyTeamColors(data) {
+    data.datasets.forEach(ds => {
+      const color = getTeamColor(ds.label);
+      ds.borderColor = color;
+      ds.backgroundColor = color;
+    });
+  }
+
+  applyTeamColors(cStandingsData);
+  applyTeamColors(pStandingsData);
+
+  const maxGB = Math.ceil(Math.max(
+    ...cStandingsData.datasets.flatMap(d => d.data.filter(v => v !== null && v !== undefined)),
+    ...pStandingsData.datasets.flatMap(d => d.data.filter(v => v !== null && v !== undefined)),
+    0
+  ));
+
   const standingsOptions = () => {
     const opts = commonOptions('ゲーム差');
     opts.scales.y.reverse = true;
     opts.scales.y.min = 0;
+    opts.scales.y.max = maxGB;
     opts.scales.y.ticks = { font: { size: 11 } };
     return opts;
   };

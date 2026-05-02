@@ -17,6 +17,7 @@ DB_PATH        = Path(__file__).resolve().parent / "data" / "npb.db"
 GMAIL_USER     = os.environ.get("GMAIL_USER", "")
 GMAIL_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 NOTIFY_EMAIL   = os.environ.get("NOTIFY_EMAIL", "")
+WEB_URL        = os.environ.get("WEB_URL", "")
 
 
 def download_db() -> None:
@@ -101,8 +102,9 @@ def main() -> None:
         subject=f"[NPB] スクレイピング完了 {today}",
         body=(
             f"スクレイピングが正常に完了しました。\n\n"
-            f"日付: {today}\n\n"
-            f"--- 実行結果 ---\n{result.stdout}"
+            f"日付: {today}\n"
+            + (f"URL: {WEB_URL}\n" if WEB_URL else "")
+            + f"\n--- 実行結果 ---\n{result.stdout}"
         ),
     )
 
