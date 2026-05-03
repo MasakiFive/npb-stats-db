@@ -44,6 +44,7 @@
         <th>得点</th>
         <th>打点</th>
         <th>盗塁</th>
+        <th>四球</th>
       </tr>
     </thead>
     <tbody>
@@ -62,6 +63,7 @@
         <td class="text-end">{{ r.runs or '-' }}</td>
         <td class="text-end">{{ r.rbi or '-' }}</td>
         <td class="text-end">{{ r.stolen_bases or '-' }}</td>
+        <td class="text-end">{{ r.walks or '-' }}</td>
       </tr>
       {% endfor %}
     </tbody>

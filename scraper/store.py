@@ -36,6 +36,9 @@ def _migrate(conn) -> None:
         conn.execute("ALTER TABLE game_batting ADD COLUMN plate_appearances INTEGER")
         conn.execute("UPDATE game_batting SET plate_appearances = at_bats")  # 近似値で初期化
         conn.commit()
+    if "walks" not in existing:
+        conn.execute("ALTER TABLE game_batting ADD COLUMN walks INTEGER")
+        conn.commit()
 
     # 投球回端数行（'.1', '.2' 等）の汚染データを除去
     conn.execute("DELETE FROM game_pitching WHERE pitcher LIKE '.%'")

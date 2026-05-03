@@ -676,6 +676,7 @@ def hawks_ranking():
             SUM(runs)                               AS runs,
             SUM(rbi)                                AS rbi,
             SUM(stolen_bases)                       AS stolen_bases,
+            SUM(walks)                              AS walks,
             CASE WHEN SUM(at_bats) > 0
                  THEN ROUND(CAST(SUM(hits) AS REAL) / SUM(at_bats), 3)
                  ELSE NULL END                      AS batting_avg

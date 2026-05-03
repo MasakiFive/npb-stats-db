@@ -520,12 +520,17 @@ def parse_game_batting(html: str, home_away: str) -> pd.DataFrame:
             lambda row: sum("本" in str(v) for v in row if pd.notna(v) and str(v) != "-"),
             axis=1,
         )
+        walks_series = raw[ab_cols].apply(
+            lambda row: sum("四" in str(v) for v in row if pd.notna(v) and str(v) != "-"),
+            axis=1,
+        )
         pa_series = raw[ab_cols].apply(
             lambda row: sum(pd.notna(v) and str(v) not in {"-", "nan"} for v in row),
             axis=1,
         )
     else:
         home_runs_series = pd.Series(0, index=raw.index)
+        walks_series = pd.Series(0, index=raw.index)
         pa_series = pd.Series(0, index=raw.index)
 
     col_map: dict = {}
@@ -547,9 +552,10 @@ def parse_game_batting(html: str, home_away: str) -> pd.DataFrame:
             col_map[c] = "stolen_bases"
     df = raw.rename(columns=col_map)
     df["home_runs"] = home_runs_series
+    df["walks"] = walks_series
     df["plate_appearances"] = pa_series
 
-    needed = ["position", "player", "at_bats", "plate_appearances", "runs", "hits", "home_runs", "rbi", "stolen_bases"]
+    needed = ["position", "player", "at_bats", "plate_appearances", "runs", "hits", "home_runs", "rbi", "stolen_bases", "walks"]
     df = df[[c for c in needed if c in df.columns]].copy()
 
     df = df.dropna(subset=["player"])
@@ -558,7 +564,7 @@ def parse_game_batting(html: str, home_away: str) -> pd.DataFrame:
     df = df[df["player"].str.strip().ne("") & df["player"].ne("nan")]
     df = df.reset_index(drop=True)
 
-    for col in ["at_bats", "plate_appearances", "runs", "hits", "home_runs", "rbi", "stolen_bases"]:
+    for col in ["at_bats", "plate_appearances", "runs", "hits", "home_runs", "rbi", "stolen_bases", "walks"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 

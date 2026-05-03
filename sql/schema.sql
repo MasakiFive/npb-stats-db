@@ -200,7 +200,8 @@ CREATE TABLE IF NOT EXISTS game_batting (
     hits              INTEGER,
     home_runs         INTEGER,
     rbi               INTEGER,
-    stolen_bases      INTEGER
+    stolen_bases      INTEGER,
+    walks             INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_game_batting_date ON game_batting(game_date);
 
