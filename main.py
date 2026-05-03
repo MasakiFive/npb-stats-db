@@ -70,7 +70,7 @@ def scrape_hawks_games(year: int, conn) -> None:
     today = date.today().isoformat()
     batting_dates = {
         r[0] for r in conn.execute(
-            "SELECT DISTINCT game_date FROM game_batting WHERE year=?", (year,)
+            "SELECT DISTINCT game_date FROM game_batting WHERE year=? AND walks IS NOT NULL", (year,)
         ).fetchall()
     }
     pitching_dates = {
