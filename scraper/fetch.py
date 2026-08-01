@@ -4,7 +4,7 @@ import time
 import requests
 from datetime import date
 
-USER_AGENT = "npb-personal-db/0.1 (personal research; contact: masaki@example.com)"
+USER_AGENT = "npb-personal-db/0.1 (personal research; contact: mfujishiro49321@gmail.com)"
 SLEEP_SEC = 2.5
 CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
 
