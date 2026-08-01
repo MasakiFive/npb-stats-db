@@ -54,6 +54,20 @@ python web.py
 # → http://localhost:5000（認証スキップ）
 ```
 
+### テスト
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+`tests/fixtures/` に NPB 公式ページの構造を模した HTML を置き、
+`scraper/parse.py` の全パーサと `scraper/store.py` の保存・マイグレーション処理を検証する。
+ネットワークアクセスも本番DBへの書き込みも発生しない。
+
+NPB 側の HTML 構造が変わってパースが壊れた場合は、実ページ（`cache/` に保存されたもの）を
+元にフィクスチャを更新して期待値を直す。
+
 ---
 
 ## 取得対象

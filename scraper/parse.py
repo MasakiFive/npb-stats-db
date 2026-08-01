@@ -1,4 +1,6 @@
 """HTMLから成績テーブルを取り出してDataFrameに整形。"""
+from __future__ import annotations  # `float | None` を Python 3.9 でも評価可能にする
+
 import re
 from io import StringIO
 from datetime import datetime
