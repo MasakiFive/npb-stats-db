@@ -12,6 +12,7 @@ from scraper.parse import (
     _extract_rank,
     _parse_innings,
     _split_player_team,
+    is_cancelled_game,
     parse_game_batting,
     parse_game_pitching,
     parse_player_batting,
@@ -254,6 +255,44 @@ def test_parse_schedule_game_urls_no_hawks():
 
 def test_team_code_map_covers_12_teams():
     assert len(TEAM_CODE_MAP) == 12
+
+
+# ---------------------------------------------------------------------------
+# 中止試合の判定
+# ---------------------------------------------------------------------------
+
+def test_is_cancelled_game_true(html):
+    assert is_cancelled_game(html("box_cancelled.html")) is True
+
+
+def test_is_cancelled_game_false_for_played_game(html):
+    assert is_cancelled_game(html("box.html")) is False
+
+
+@pytest.mark.parametrize("text", [
+    "【雨天のため中止】",
+    "【降雪のため中止】",
+    "【グラウンド不良のため中止】",
+    "<p>【中止】</p>",
+])
+def test_is_cancelled_game_variants(text):
+    assert is_cancelled_game(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "",
+    "<p>試合は中止されませんでした</p>",     # 【】で囲まれていない「中止」は拾わない
+    "<a>中止情報のお知らせ</a>",
+    "【雨天のため開始遅延】",
+])
+def test_is_cancelled_game_not_matched(text):
+    assert is_cancelled_game(text) is False
+
+
+def test_cancelled_page_has_no_batting_table(html):
+    """中止ページをそのままパースすると失敗する（＝事前判定が必要な理由）。"""
+    with pytest.raises(ValueError, match="打撃テーブル"):
+        parse_game_batting(html("box_cancelled.html"), "H")
 
 
 # ---------------------------------------------------------------------------

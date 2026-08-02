@@ -17,6 +17,7 @@ from scraper.parse import (
     parse_schedule_game_urls,
     parse_game_batting,
     parse_game_pitching,
+    is_cancelled_game,
 )
 from scraper.store import (
     get_conn,
@@ -97,6 +98,11 @@ def scrape_hawks_games(year: int, conn) -> None:
                 continue  # 取得済みはスキップ
             try:
                 box_html = fetch(game["url"])
+                if is_cancelled_game(box_html):
+                    # 中止試合はボックススコアが存在しない。エラーではないので
+                    # 「打撃テーブルが見つかりません」を出さずに静かにスキップする。
+                    print(f"[ホークス] {game['game_date']} vs {game['opponent']} 中止のためスキップ")
+                    continue
                 bat_df = parse_game_batting(box_html, game["home_away"])
                 pit_df = parse_game_pitching(box_html, game["home_away"])
                 save_game_batting(conn, year, game["game_date"],

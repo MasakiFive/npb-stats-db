@@ -494,6 +494,20 @@ def parse_schedule_game_urls(html: str, year: int) -> list:
     return results
 
 
+# 中止表記は【雨天のため中止】【降雪のため中止】等。単なる「中止」の部分一致だと
+# 通常ページ内の別試合の告知を拾いうるため、【】で囲まれた形に限定する。
+_CANCELLED_RE = re.compile(r"【[^】]*中止】")
+
+
+def is_cancelled_game(html: str) -> bool:
+    """中止試合のボックススコアページかを判定する。
+
+    NPB は中止試合にも /scores/ の URL を発行する。box.html は 200 を返すが
+    イニング枠だけの空の線スコアしか無く、打撃・投手テーブルは存在しない。
+    """
+    return bool(_CANCELLED_RE.search(html))
+
+
 def parse_game_batting(html: str, home_away: str) -> pd.DataFrame:
     """ボックススコアHTMLからホークス打線のDataFrameを返す。
     NPBボックススコアはホームチームが先（テーブル[0]）、アウェーが後（テーブル[1]）。
