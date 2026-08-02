@@ -2,14 +2,17 @@
 
 NPB公式サイト(npb.jp)から野球成績を取得してSQLiteに蓄積し、Webブラウザで閲覧できる個人用ツール。
 
+列定義・処理フロー・環境変数などの詳細は [SPEC.md](SPEC.md) を参照。
+
 ## 本番環境（GCP）
 
 | コンポーネント | 内容 |
 | ------------- | ---- |
 | スクレイパー | Cloud Run Job（`npb-stats-job`）毎朝 8:00 JST 自動実行 |
 | DB 永続化 | GCS: `gs://amplified-alpha-330603-npb-stats/npb.db` |
-| Web ビューア | Cloud Run Service（`npb-stats-web`）Google OAuth 認証付き |
+| Web ビューア | Cloud Run Service（`npb-stats-web`）Google OAuth + 単一アカウント許可制 |
 | DB 自動更新 | Web サービスが毎朝 9:00 JST に GCS から最新 DB を取得 |
+| 実行結果の通知 | スクレイピングの完了・失敗時に Gmail で通知 |
 
 ### コードを変更した場合のデプロイ
 
@@ -30,7 +33,7 @@ bash gcp/update.sh
 ```bash
 cd ~/npb-stats-db
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 # 歴代成績データを投入（初回のみ）
@@ -40,7 +43,7 @@ python seed.py
 ### 成績データの取得
 
 ```bash
-source .venv/bin/activate
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 python main.py          # 当年を自動取得
 python main.py --year 2025  # 年を指定する場合
 ```
@@ -61,12 +64,8 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-`tests/fixtures/` に NPB 公式ページの構造を模した HTML を置き、
-`scraper/parse.py` の全パーサと `scraper/store.py` の保存・マイグレーション処理を検証する。
-ネットワークアクセスも本番DBへの書き込みも発生しない。
-
-NPB 側の HTML 構造が変わってパースが壊れた場合は、実ページ（`cache/` に保存されたもの）を
-元にフィクスチャを更新して期待値を直す。
+ネットワークアクセスも本番DBへの書き込みも発生しない。カバー範囲とフィクスチャの
+更新手順は [SPEC.md の「テスト仕様」](SPEC.md#テスト仕様) を参照。
 
 ---
 
@@ -138,6 +137,7 @@ ORDER BY count DESC;
 
 ## 注意
 
-- NPB公式の利用規約上、データは個人のローカル利用に限定する
-- リクエスト間隔は2.5秒、取得HTMLは `cache/` にローカル保存
+- NPB公式の利用規約に基づき、データは私的利用の範囲に限定する。DB は GCS の非公開バケットに置き、Web ビューアは Google OAuth で単一アカウント（`ALLOWED_EMAIL`）のみに公開している
+- リクエスト間隔は2.5秒、取得HTMLは `cache/` に日付別で保存
+- 中止試合はボックススコアが存在しないため取得をスキップする。ログに「打撃テーブルが見つかりません」が出た場合は NPB 側の HTML 構造が変わった可能性がある
 - 歴代成績データ（`sql/seeds.sql`）は記憶に基づくため一部要確認。誤りは直接編集して `python seed.py` を再実行

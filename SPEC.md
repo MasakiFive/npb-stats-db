@@ -3,7 +3,8 @@
 ## 概要
 
 NPB公式サイト（npb.jp）から野球成績データをスクレイピングし、SQLiteデータベースに蓄積する個人用ツール。
-週1回の手動実行を想定し、スナップショット方式で時系列データを管理する。
+Cloud Run Job による毎日1回の自動実行を前提とし、スナップショット方式で時系列データを管理する。
+ローカルでの手動実行（`python main.py`）も同じコードパスで行える。
 
 ---
 
@@ -38,6 +39,17 @@ npb-stats-db/
 │   ├── setup.sh         # GCPリソース初回セットアップ
 │   ├── deploy_web.sh    # Webサービスデプロイ
 │   └── update.sh        # スクレイパーイメージ更新
+├── tests/
+│   ├── conftest.py      # フィクスチャローダ・import パス設定
+│   ├── test_parse.py    # パーサの回帰テスト
+│   ├── test_store.py    # 保存・マイグレーションのテスト
+│   ├── test_main.py     # scrape_hawks_games の統合テスト
+│   └── fixtures/        # NPB公式ページの構造を模したHTML
+├── Dockerfile           # Cloud Run Job 用（CMD: python gcp_job.py）
+├── Dockerfile.web       # Cloud Run Service 用（CMD: gunicorn web:app）
+├── requirements.txt     # 実行時依存
+├── requirements-dev.txt # 実行時依存 + pytest
+├── pytest.ini           # pytest 設定（testpaths=tests）
 ├── data/
 │   └── npb.db           # SQLiteデータベース（自動生成）
 └── cache/
@@ -71,10 +83,27 @@ python main.py --year 2026
    - 対応する `save_*()` でDBへ保存
 3. `scrape_hawks_games(year, conn)` でホークス全試合のボックススコアを取得
    - 3〜10月の月別スケジュールページからホークス試合URLを抽出
-   - 打撃・投手データが両方揃っている試合はスキップ（キャッシュ活用）
    - 各ボックススコアから `parse_game_batting()` / `parse_game_pitching()` でDataFrame化
    - `save_game_batting()` / `save_game_pitching()` でDBへ保存
 4. 実行後に全テーブルの行数をコンソール出力
+
+**ホークス試合のスキップ条件**
+
+`scrape_hawks_games()` は以下の順に判定し、該当する試合を取得対象から外す。
+
+| 判定 | 条件 | ログ出力 |
+| ---- | ---- | ------- |
+| 未来の試合 | `game_date > today` | なし |
+| 取得済み | `game_batting`（`walks IS NOT NULL`）と `game_pitching` の両方に行がある | なし |
+| 中止試合 | `is_cancelled_game(box_html)` が真 | `中止のためスキップ` |
+
+中止試合はDBに行が残らないため、翌日以降も毎回1回だけボックススコアを取得して
+判定し直す。取得済み判定で `walks IS NOT NULL` を条件にしているのは、`walks` 列を
+追加する前にスクレイプした試合を再取得させるため。
+
+上記いずれにも該当せずパースに失敗した場合は `失敗: <例外メッセージ>` を出力して
+次の試合へ進む（1試合の失敗で全体は止めない）。「打撃テーブルが見つかりません」が
+出た場合は NPB 側のHTML構造が変わった可能性がある。
 
 **TARGETS 定義**
 
@@ -156,7 +185,8 @@ python seed.py   # 初回のみ実行
 | `parse_player_batting(html, league)` | bat_c / bat_p | 個人打撃。選手名からチームコードを分離 |
 | `parse_player_pitching(html, league)` | pit_c / pit_p | 個人投手。先頭テーブル（規定投球回以上）のみ取得 |
 | `parse_player_fielding(html, league)` | fld_c / fld_p | 個人守備。`<h5>` 見出しでポジション別にテーブルを分割し全結合。ポジションを英略称（1B/2B/3B/SS/OF/C/P）で付与 |
-| `parse_schedule_game_urls(html, year)` | — | 月別スケジュールHTMLからホークス試合URL・日付・H/A・対戦相手を抽出 |
+| `parse_schedule_game_urls(html, year)` | — | 月別スケジュールHTMLからホークス試合URL・日付・H/A・対戦相手を抽出。同一試合への重複リンクは1件に畳む |
+| `is_cancelled_game(html)` | — | 中止試合のボックススコアページかを判定。`【雨天のため中止】` のように `【】` で囲まれた「中止」表記に限定して照合する（単なる部分一致だとページ内の別試合の告知を誤検知するため） |
 | `parse_game_batting(html, home_away)` | — | ボックススコアHTMLからホークス打線のDataFrameを返す。打席結果列（1〜9）から本塁打数・打席数も算出 |
 | `parse_game_pitching(html, home_away)` | — | ボックススコアHTMLからホークス投手陣のDataFrameを返す。投球回は NPB 表記（`5.2` = 5と2/3回）を `float` に変換 |
 | `_parse_innings(val)` | — | NPB投球回表記（整数 or `N.1`/`N.2`）を浮動小数に変換するユーティリティ |
@@ -172,6 +202,10 @@ NPBボックススコア（`/scores/YYYY/MMDD/{away}-{home}-NN/box.html`）は�
 | 投手テーブル[0] | ホークス（ホーム） | 相手（ホーム） |
 | 投手テーブル[1] | 相手（アウェー） | ホークス（アウェー） |
 
+中止試合および当日未実施の試合ではこれらのテーブルが存在せず、`parse_game_batting()` /
+`parse_game_pitching()` は `ValueError` を送出する。中止試合は `is_cancelled_game()` で
+事前に除外する。
+
 ---
 
 ### scraper/store.py — データ保存
@@ -180,7 +214,7 @@ NPBボックススコア（`/scores/YYYY/MMDD/{away}-{home}-NN/box.html`）は�
 
 | 定数 | パス |
 |------|------|
-| `DB_PATH` | `{プロジェクトルート}/data/npb.db` |
+| `DB_PATH` | 環境変数 `NPB_DB_PATH`。未設定時は `{プロジェクトルート}/data/npb.db` |
 | `SCHEMA_PATH` | `{プロジェクトルート}/sql/schema.sql` |
 
 **関数一覧**
@@ -621,16 +655,90 @@ python web.py
 
 ---
 
+## テスト仕様
+
+**実行方法**
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+**方針**
+
+- ネットワークアクセスと本番DBへの書き込みを一切行わない
+- HTTP取得は `tests/fixtures/` のHTMLで代替し、DBは `tmp_path` 上のSQLiteに差し替える
+- NPB側のHTML構造変更やリファクタでパースが壊れたことを検知することが主目的
+
+**ファイル構成**
+
+| ファイル | 対象 | 主な検証内容 |
+| ------- | ---- | ---------- |
+| `tests/conftest.py` | — | フィクスチャローダ `html(name)` の提供、リポジトリルートの `sys.path` 追加 |
+| `tests/test_parse.py` | `scraper/parse.py` | 全パーサ、テーブル選択条件、打席結果セルからの本塁打・四球・打席数の集計、投球回変換、合計行・汚染行の除去、中止判定 |
+| `tests/test_store.py` | `scraper/store.py` | `upsert_snapshot` の冪等性とコミット順序、同一 `snapshot_id` でのリーグ別上書き、旧スキーマからのマイグレーション、parse→store の往復（出力列がスキーマ列に収まること） |
+| `tests/test_main.py` | `main.scrape_hawks_games` | `fetch` を差し替えた統合テスト。中止試合のスキップ、取得済み試合の再取得抑止 |
+
+**フィクスチャ**
+
+`tests/fixtures/` にNPB公式ページの構造を最小限に模したHTMLを置く。実ページそのものではなく、
+パーサが依存している構造（列名、テーブルの並び順、見出し階層）だけを再現している。
+
+| ファイル | 模した対象 |
+| ------- | -------- |
+| `std_p.html` / `tmb_p.html` / `tmp_p.html` / `tmf_p.html` | 勝敗表・チーム打撃/投手/守備 |
+| `bat_p.html` / `pit_p.html` / `fld_p.html` | 個人打撃/投手/守備ランキング |
+| `schedule_04.html` | 月別スケジュール（重複リンク・他球団の試合を含む） |
+| `box.html` | ボックススコア（ホーム/ビジター両方の打撃・投手テーブル） |
+| `box_cancelled.html` | 中止試合のボックススコア（空の線スコアと `【雨天のため中止】` のみ） |
+
+**フィクスチャの更新手順**
+
+NPB側のHTML構造が変わってテストが落ちた場合は、`cache/YYYYMMDD/` に保存された実ページを
+参照して該当フィクスチャの構造を合わせ、期待値を実データに基づいて修正する。
+
+**既知の制約**
+
+テーブルが1つも存在しないHTMLを `pd.read_html` に渡すと、lxml が失敗して html5lib に
+フォールバックし、`ValueError` ではなく `ImportError: Missing optional dependency 'html5lib'`
+が送出される。テストは実際に起こりやすい「テーブルはあるが目的の構造ではない」ケースで
+検証している。
+
+---
+
+## 環境変数
+
+| 変数名 | 使用箇所 | デフォルト | 説明 |
+| ------ | ------- | --------- | ---- |
+| `NPB_DB_PATH` | `scraper/store.py`, `web.py` | `{プロジェクトルート}/data/npb.db` | SQLiteファイルのパス。`Dockerfile.web` では `/tmp/npb.db` を指定 |
+| `GCS_BUCKET` | `gcp_job.py`, `web.py` | Job: `amplified-alpha-330603-npb-stats`／Web: 空 | DB永続化先のGCSバケット。Webでは空ならGCS連携を行わない |
+| `GCS_DB_BLOB` | `gcp_job.py`, `web.py` | `npb.db` | バケット内のオブジェクト名 |
+| `ALLOWED_EMAIL` | `web.py` | 空 | ログインを許可するGoogleアカウント。空なら制限なし |
+| `GOOGLE_CLIENT_ID` | `web.py` | 空 | OAuthクライアントID。**空の場合は認証自体をスキップ**（ローカル開発用） |
+| `GOOGLE_CLIENT_SECRET` | `web.py` | 空 | OAuthクライアントシークレット |
+| `FLASK_SECRET_KEY` | `web.py` | `dev-only-insecure-key` | セッション署名鍵。本番ではSecret Managerから注入 |
+| `GMAIL_USER` | `gcp_job.py` | 空 | 通知メールの送信元アカウント |
+| `GMAIL_APP_PASSWORD` | `gcp_job.py` | 空 | Gmailアプリパスワード |
+| `NOTIFY_EMAIL` | `gcp_job.py` | 空 | 通知メールの宛先 |
+| `WEB_URL` | `gcp_job.py` | 空 | 完了通知メールに記載するWebビューアのURL。空なら記載しない |
+
+`GMAIL_USER` / `GMAIL_APP_PASSWORD` / `NOTIFY_EMAIL` のいずれかが空の場合、通知は送信されず
+ログに `[Mail] 通知設定が未完了のためスキップ` が出力される。
+
+---
+
 ## 運用仕様
 
 | 項目 | 内容 |
 |------|------|
 | スクレイパー実行頻度 | 毎日自動（Cloud Scheduler: 毎朝8:00 JST） |
 | リクエスト間隔 | 2.5秒 |
-| キャッシュ有効期間 | 当日中（`cache/YYYYMMDD/` 単位） |
-| データ利用制限 | NPB公式利用規約に基づき個人ローカル利用に限定 |
+| キャッシュ有効期間 | 当日中（`cache/YYYYMMDD/` 単位）。Cloud Run Job はコンテナが毎回新規のため実質無効 |
+| データ利用制限 | NPB公式利用規約に基づき私的利用の範囲に限定。DBは非公開のGCSバケットに保管し、WebビューアはOAuthで単一アカウントのみに公開 |
 | DBファイル | GCS: `gs://amplified-alpha-330603-npb-stats/npb.db`（SQLite3） |
-| Webサーバー | Cloud Run Service（Google OAuth 認証付き） |
+| Webサーバー | Cloud Run Service（Google OAuth + `ALLOWED_EMAIL` による単一アカウント許可制） |
+| 実行結果の通知 | Gmail SMTP（`smtp.gmail.com:465`）で完了・失敗を通知。`GMAIL_USER` / `GMAIL_APP_PASSWORD` / `NOTIFY_EMAIL` のいずれかが未設定なら送信をスキップ |
+| 失敗時の挙動 | `main.py` が異常終了してもDBはGCSへアップロードし、失敗通知を送ってから終了コードを引き継いで終了 |
 | シードデータ | `python seed.py` で初回のみ投入。修正は `sql/seeds.sql` を直接編集 |
 
 ---
@@ -645,6 +753,7 @@ Cloud Scheduler（毎朝 8:00 JST）
         ① GCS から npb.db をダウンロード
         ② python main.py --year <当年> を実行（NPB スクレイピング）
         ③ 更新した npb.db を GCS にアップロード
+        ④ Gmail SMTP で完了 / 失敗を通知（実行ログ本文つき）
 
 GCS（npb.db 永続ストレージ）
     ↓ 毎朝 9:00 JST（APScheduler）
@@ -661,15 +770,18 @@ Cloud Run Service（npb-stats-web）
 | Cloud Run Job | `npb-stats-job` | スクレイパー実行コンテナ |
 | Cloud Run Service | `npb-stats-web` | Web ビューア |
 | Cloud Scheduler | `npb-stats-job-trigger` | 毎朝8:00 JST に Job を起動 |
-| Secret Manager | `npb-web-client-id` / `npb-web-client-secret` / `npb-web-secret-key` | OAuth 認証情報 |
+| Secret Manager | `npb-web-client-id` / `npb-web-client-secret` / `npb-web-secret-key` | OAuth 認証情報・Flask セッションキー |
+| Secret Manager | `npb-gmail-user` / `npb-gmail-app-password` | 通知メール送信用の Gmail アカウントとアプリパスワード |
 | サービスアカウント | `npb-stats-job@amplified-alpha-330603.iam.gserviceaccount.com` | Job・Service 共用 |
 
 ### Cloud Run Job（スクレイパー）
 
 - **エントリーポイント**: `gcp_job.py`
 - **Dockerfile**: `Dockerfile`（CMD: `python gcp_job.py`）
-- **環境変数**: `GCS_BUCKET`, `GCS_DB_BLOB`
-- **対象年度**: `datetime.now().year` で自動取得（`--year` 引数で上書き可）
+- **環境変数**: `GCS_BUCKET`, `GCS_DB_BLOB`, `NOTIFY_EMAIL`, `WEB_URL`
+- **シークレット**: `GMAIL_USER`, `GMAIL_APP_PASSWORD`（Secret Manager）
+- **対象年度**: JST 現在時刻の年を自動取得し `main.py --year` に渡す
+- **DB パス**: `{アプリルート}/data/npb.db`（コンテナ内一時領域）
 
 ### Cloud Run Service（Web ビューア）
 
