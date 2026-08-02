@@ -1,6 +1,9 @@
-"""週1で手動実行するメインスクリプト。
-使い方: python main.py  # 当年を自動取得
-        python main.py --year 2025  # 年を指定する場合
+"""成績スクレイピングのメインスクリプト。
+
+本番では Cloud Run Job（gcp_job.py）から毎朝 8:00 JST に実行される。
+ローカルでの手動実行:
+    python main.py              # 当年を自動取得
+    python main.py --year 2025  # 年を指定する場合
 """
 import argparse
 from datetime import datetime, date
