@@ -95,7 +95,7 @@ python -m pytest
 | `/player/pitching` | 個人投手ランキング |
 | `/player/fielding` | 個人守備ランキング |
 | `/rankings` | 打率/防御率/奪三振/勝利数/K9 トップ10 |
-| `/trends` | 打率・防御率・チーム順位の推移グラフ |
+| `/trends` | 打率・防御率・チームのゲーム差の推移グラフ |
 | `/history` | 歴代優勝チーム・優勝回数（1950〜） |
 | `/hawks/batting` | ホークス試合別打撃成績 |
 | `/hawks/ranking` | ホークス打撃ランキング（規定打席順位付き） |

@@ -70,7 +70,7 @@ python main.py --year 2026
 
 | 引数 | 型 | デフォルト | 説明 |
 |------|----|-----------|------|
-| `--year` | int | 2026 | 取得対象年度 |
+| `--year` | int | 実行時の当年（`datetime.now().year`） | 取得対象年度 |
 
 **処理フロー**
 
@@ -187,7 +187,7 @@ python seed.py   # 初回のみ実行
 | `parse_player_fielding(html, league)` | fld_c / fld_p | 個人守備。`<h5>` 見出しでポジション別にテーブルを分割し全結合。ポジションを英略称（1B/2B/3B/SS/OF/C/P）で付与 |
 | `parse_schedule_game_urls(html, year)` | — | 月別スケジュールHTMLからホークス試合URL・日付・H/A・対戦相手を抽出。同一試合への重複リンクは1件に畳む |
 | `is_cancelled_game(html)` | — | 中止試合のボックススコアページかを判定。`【雨天のため中止】` のように `【】` で囲まれた「中止」表記に限定して照合する（単なる部分一致だとページ内の別試合の告知を誤検知するため） |
-| `parse_game_batting(html, home_away)` | — | ボックススコアHTMLからホークス打線のDataFrameを返す。打席結果列（1〜9）から本塁打数・打席数も算出 |
+| `parse_game_batting(html, home_away)` | — | ボックススコアHTMLからホークス打線のDataFrameを返す。打席結果列（1〜9）から本塁打数・四球数・打席数も算出 |
 | `parse_game_pitching(html, home_away)` | — | ボックススコアHTMLからホークス投手陣のDataFrameを返す。投球回は NPB 表記（`5.2` = 5と2/3回）を `float` に変換 |
 | `_parse_innings(val)` | — | NPB投球回表記（整数 or `N.1`/`N.2`）を浮動小数に変換するユーティリティ |
 
@@ -487,6 +487,7 @@ NPBボックススコア（`/scores/YYYY/MMDD/{away}-{home}-NN/box.html`）は�
 | home_runs | INTEGER | 本塁打（打席結果列の「本」を含むセル数から算出） |
 | rbi | INTEGER | 打点 |
 | stolen_bases | INTEGER | 盗塁 |
+| walks | INTEGER | 四球（打席結果列の「四」を含むセル数から算出。列追加前に取得した行は NULL） |
 
 - インデックス: `game_date`
 
@@ -602,12 +603,20 @@ python web.py
 | `/player/pitching` | 個人投手 | 防御率ランキング順（規定投球回以上） |
 | `/player/fielding` | 個人守備 | 順位・ポジション順（ポジションフィルタあり） |
 | `/rankings` | ランキング | 打率/防御率/奪三振/勝利数/K9 の各トップ10 |
-| `/trends` | 推移グラフ | 打率・防御率の推移折れ線グラフ（Chart.js） |
+| `/trends` | 推移グラフ | 打率・防御率・セ/パ両リーグのゲーム差の推移折れ線グラフ（Chart.js） |
 | `/history` | 歴代成績 | 1950年〜の年度別優勝チーム + チーム別優勝回数 |
 | `/hawks/batting` | ホークス打撃 | 試合別打撃成績（試合選択ドロップダウン） |
 | `/hawks/ranking` | ホークス打撃ランキング | 年間累積成績。規定打席（試合数×3.1）到達者に順位付け |
 | `/hawks/pitching` | ホークス投手 | 試合別投手成績（試合選択ドロップダウン） |
 | `/hawks/pitching/ranking` | ホークス投手ランキング | 年間累積成績。規定投球回（試合数×1.0）到達者に順位付け |
+
+**認証用ルート**
+
+| URL | 説明 |
+|-----|------|
+| `/login` | Google OAuth の認可画面へリダイレクト。`GOOGLE_CLIENT_ID` 未設定時は `/` へリダイレクト |
+| `/auth/callback` | OAuth コールバック。`ALLOWED_EMAIL` と一致しないアカウントは 403 |
+| `/logout` | セッションを破棄して `/login` へリダイレクト |
 
 **共通UIコントロール**
 
@@ -628,6 +637,7 @@ python web.py
 | `get_prev_snapshot_id(current_id)` | 指定IDの直前スナップショットIDを返す |
 | `standings_with_rank_change(snapshot_id, league)` | 直前スナップショットとの順位差（`rank_change`）を付加した勝敗表データ（`list[dict]`）を返す。正値＝順位上昇、負値＝順位下降、`None`＝比較対象なし |
 | `_trend_json(table, stat_col, league)` | 最新スナップショット上位10選手の全スナップショット推移をChart.js形式のJSONで返す。防御率は昇順で選手を選択 |
+| `_standings_trend_json(league)` | リーグ内全チームのゲーム差推移をChart.js形式のJSONで返す。首位（`games_behind` が NULL）は 0 として扱う |
 
 **ランキングページの集計クエリ**
 
@@ -645,6 +655,8 @@ python web.py
 - 全スナップショットにわたって各選手の指定スタッツを取得しプロット
 - データが存在しない日付はNaN（`spanGaps: false` で線を繋がない）
 - 防御率グラフはY軸反転（低い方が上 = 優秀）
+- ゲーム差グラフはリーグ切替に関係なくセ・パ両リーグ分を描画し、各リーグの全チームを対象とする
+  - Y軸反転（首位 = 0 が上）。比較しやすいよう両リーグで同じY軸最大値を使う
 
 **歴代成績ページの仕様**
 
