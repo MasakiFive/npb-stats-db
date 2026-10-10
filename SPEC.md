@@ -70,22 +70,60 @@ python main.py --year 2026
 
 | 引数 | 型 | デフォルト | 説明 |
 |------|----|-----------|------|
-| `--year` | int | 実行時の当年（`datetime.now().year`） | 取得対象年度 |
+| `--year` | int | 実行時の当年（JST） | 取得対象年度 |
+| `--final` | `LEAGUE=YYYY-MM-DD` | なし（前日とみなす） | 閉幕したリーグの最終戦日を明示する。複数指定可。ジョブが止まっていた期間の補完用 |
+
+**終了コード**
+
+| コード | 意味 |
+| ----- | ---- |
+| 0 | 取り込みを実行した |
+| 10（`EXIT_SKIPPED`） | シーズン期間外のため何もしなかった（DBも変更しない） |
+| その他 | 異常終了 |
 
 **処理フロー**
 
 1. `init_db()` でスキーマを初期化・マイグレーション実行（冪等）
-2. `TARGETS` リストを順に処理
+2. `get_season_status(year)` で公式戦トップ（`https://npb.jp/games/{year}/`）を取得し、
+   リーグごとの進行状況を判定する（後述「シーズン判定」）
+3. `plan_run()` で取り込みの要否と成績基準日を決める。不要なら `EXIT_SKIPPED` で終了
+4. `TARGETS` リストを順に処理
    - URLを構築して `fetch()` でHTML取得
-   - `parse_stats_date()` でHTML内の成績基準日を抽出
+   - シーズン中のリーグは `parse_stats_date()` でHTML内の成績基準日を抽出。
+     閉幕したリーグはページから「◯月◯日 現在」が消えるため、3. で決めた基準日を使う
    - `upsert_snapshot()` でスナップショットをコミット（FK制約のため先行）
    - 対応する `parse_*()` でDataFrame化
    - 対応する `save_*()` でDBへ保存
-3. `scrape_hawks_games(year, conn)` でホークス全試合のボックススコアを取得
+5. `scrape_hawks_games(year, conn, until)` でホークス全試合のボックススコアを取得
    - 3〜10月の月別スケジュールページからホークス試合URLを抽出
+   - パ・リーグ閉幕後は最終戦日（`until`）より後の試合を除外する。日程ページには
+     クライマックスシリーズ・日本シリーズの試合も同じ形式で載るため
    - 各ボックススコアから `parse_game_batting()` / `parse_game_pitching()` でDataFrame化
    - `save_game_batting()` / `save_game_pitching()` でDBへ保存
-4. 実行後に全テーブルの行数をコンソール出力
+6. 新たに閉幕を検知したリーグの最終戦日を `season_end` に記録（取り込みが最後まで成功した場合のみ）
+7. 実行後に全テーブルの行数をコンソール出力
+
+**シーズン判定**
+
+公式戦トップの勝敗表欄の見出し（`<h4 class="league_tit_c|p">` 内の `<time>`）でリーグごとに判定する。
+
+| 表示 | 状態 | 備考 |
+| ---- | ---- | ---- |
+| ページが 404、または勝敗表欄なし | 開幕前（`not_started`） | 翌年のページは公開前は 404 |
+| `8月3日現在` | シーズン中（`in_progress`） | 日付を基準日として使う |
+| `全日程終了` | 閉幕（`finished`） | レギュラーシーズン終了後。成績ページからも日付表記が消える |
+| 上記以外 | 例外 | 表記変更を黙ってシーズン外扱いにしないため |
+
+`plan_run()` の判定:
+
+| 状況 | 動作 |
+| ---- | ---- |
+| どちらかのリーグがシーズン中 | 取り込む。閉幕済みのリーグも同じスナップショットに最終成績を入れる（リーグ切替で表示が空にならないように） |
+| 両リーグ閉幕、`season_end` に未記録のリーグあり | 最終成績を取り込む。基準日は最終戦日（未記録のリーグは前日、`--final` 指定があればその日） |
+| 開幕前、または両リーグの最終成績を取り込み済み | スキップ（`EXIT_SKIPPED`） |
+
+最終戦日を「前日」とみなすのは、毎朝実行していれば閉幕を検知するのは最終戦の翌朝だから。
+ジョブが止まっていて検知が遅れた場合は `--final` で正しい日付を指定して手動実行する。
 
 **ホークス試合のスキップ条件**
 
@@ -170,6 +208,7 @@ python seed.py   # 初回のみ実行
 | 関数 | 説明 |
 |------|------|
 | `parse_stats_date(html)` | `「YYYY年M月D日 現在」` 形式の文字列からISO日付文字列（`YYYY-MM-DD`）を抽出 |
+| `parse_season_status(html, year)` | 公式戦トップの勝敗表欄からリーグ別の進行状況 `{'C': (状態, 基準日), 'P': ...}` を返す（main.py の「シーズン判定」参照） |
 | `_split_player_team(name)` | `'佐藤輝明(神)'` を `('佐藤輝明', '神')` に分割。括弧なしの場合は `(name, None)` |
 | `_to_numeric_cols(df, cols)` | 指定列を数値変換（変換不能値はNaN） |
 | `_extract_rank(series)` | `'1位'` や `'1'` など数字を含む文字列から整数を抽出 |
@@ -224,6 +263,8 @@ NPBボックススコア（`/scores/YYYY/MMDD/{away}-{home}-NN/box.html`）は�
 | `get_conn()` | SQLite接続を返す。`PRAGMA foreign_keys = ON` を設定 |
 | `init_db()` | `schema.sql` を実行してテーブルを初期化し、`_migrate()` でカラム追加を適用（冪等） |
 | `_migrate(conn)` | `ALTER TABLE` によるカラム追加を冪等に適用。`game_pitching` の汚染行（投球回端数行）も除去 |
+| `get_final_dates(conn, year)` | `season_end` から記録済みのリーグ別最終戦日を `{'C': 'YYYY-MM-DD', ...}` で返す |
+| `record_final_date(conn, year, league, final_date)` | `season_end` にリーグの最終戦日を記録 |
 | `upsert_snapshot(conn, year, stats_date)` | `snapshots` に `INSERT OR IGNORE` し、そのIDを返す。FK制約のため子テーブルのINSERT前に `commit()` を実施 |
 | `save_standings(conn, snapshot_id, df)` | `team_standings` に保存 |
 | `save_team_batting(conn, snapshot_id, df)` | `team_batting` に保存 |
@@ -259,6 +300,21 @@ NPBボックススコア（`/scores/YYYY/MMDD/{away}-{home}-NN/box.html`）は�
 | fetched_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | DB登録日時 |
 
 - `UNIQUE(year, stats_date)` — 同一基準日のデータは1レコードのみ保持
+
+---
+
+### season_end — リーグ別最終戦日
+
+閉幕したリーグの最終成績を取り込んだ時点で記録する。以降の実行で閉幕後の同じ成績を
+取り込み直さないための目印（main.py の「シーズン判定」参照）。
+
+| カラム | 型 | 説明 |
+|--------|----|------|
+| year | INTEGER | 対象年度 |
+| league | TEXT | `'C'` または `'P'` |
+| final_date | DATE | レギュラーシーズン最終戦日 |
+
+- PK: `(year, league)`
 
 ---
 
@@ -563,6 +619,7 @@ snapshots (1)
     └── (N) player_fielding
 
 season_results   ← seeds.sql から独立投入（snapshots との FK なし）
+season_end       ← シーズン判定用の目印（snapshots との FK なし）
 
 game_batting     ← ボックススコアから独立取得（snapshots との FK なし）
 game_pitching    ← ボックススコアから独立取得（snapshots との FK なし）
@@ -689,7 +746,7 @@ python -m pytest
 | `tests/conftest.py` | — | フィクスチャローダ `html(name)` の提供、リポジトリルートの `sys.path` 追加 |
 | `tests/test_parse.py` | `scraper/parse.py` | 全パーサ、テーブル選択条件、打席結果セルからの本塁打・四球・打席数の集計、投球回変換、合計行・汚染行の除去、中止判定 |
 | `tests/test_store.py` | `scraper/store.py` | `upsert_snapshot` の冪等性とコミット順序、同一 `snapshot_id` でのリーグ別上書き、旧スキーマからのマイグレーション、parse→store の往復（出力列がスキーマ列に収まること） |
-| `tests/test_main.py` | `main.scrape_hawks_games` | `fetch` を差し替えた統合テスト。中止試合のスキップ、取得済み試合の再取得抑止 |
+| `tests/test_main.py` | `main` | `fetch` を差し替えた統合テスト。中止試合のスキップ、取得済み試合の再取得抑止、閉幕後の試合の除外、シーズン判定（`plan_run` の全分岐、最終成績を1回だけ取り込むこと、開幕前のスキップ） |
 
 **フィクスチャ**
 
@@ -700,6 +757,7 @@ python -m pytest
 | ------- | -------- |
 | `std_p.html` / `tmb_p.html` / `tmp_p.html` / `tmf_p.html` | 勝敗表・チーム打撃/投手/守備 |
 | `bat_p.html` / `pit_p.html` / `fld_p.html` | 個人打撃/投手/守備ランキング |
+| `games_top.html` | 公式戦トップの勝敗表欄（セ=シーズン中、パ=全日程終了） |
 | `schedule_04.html` | 月別スケジュール（重複リンク・他球団の試合を含む） |
 | `box.html` | ボックススコア（ホーム/ビジター両方の打撃・投手テーブル） |
 | `box_cancelled.html` | 中止試合のボックススコア（空の線スコアと `【雨天のため中止】` のみ） |
@@ -743,7 +801,7 @@ NPB側のHTML構造が変わってテストが落ちた場合は、`cache/YYYYMM
 
 | 項目 | 内容 |
 |------|------|
-| スクレイパー実行頻度 | 毎日自動（Cloud Scheduler: 毎朝8:00 JST） |
+| スクレイパー実行頻度 | Cloud Scheduler は通年で毎朝8:00 JST に起動。取り込むのはシーズン中と閉幕翌朝の1回だけで、それ以外は公式戦トップを1ページ取得して終了する（main.py の「シーズン判定」参照） |
 | リクエスト間隔 | 2.5秒 |
 | キャッシュ有効期間 | 当日中（`cache/YYYYMMDD/` 単位）。Cloud Run Job はコンテナが毎回新規のため実質無効 |
 | データ利用制限 | NPB公式利用規約に基づき私的利用の範囲に限定。DBは非公開のGCSバケットに保管し、WebビューアはOAuthで単一アカウントのみに公開 |
@@ -751,6 +809,7 @@ NPB側のHTML構造が変わってテストが落ちた場合は、`cache/YYYYMM
 | Webサーバー | Cloud Run Service（Google OAuth + `ALLOWED_EMAIL` による単一アカウント許可制） |
 | 実行結果の通知 | Gmail SMTP（`smtp.gmail.com:465`）で完了・失敗を通知。`GMAIL_USER` / `GMAIL_APP_PASSWORD` / `NOTIFY_EMAIL` のいずれかが未設定なら送信をスキップ |
 | 失敗時の挙動 | `main.py` が異常終了してもDBはGCSへアップロードし、失敗通知を送ってから終了コードを引き継いで終了 |
+| シーズン期間外の挙動 | `main.py` が `EXIT_SKIPPED`（10）で終わった場合、DBのアップロードも通知も行わずに正常終了 |
 | シードデータ | `python seed.py` で初回のみ投入。修正は `sql/seeds.sql` を直接編集 |
 
 ---
@@ -764,6 +823,7 @@ Cloud Scheduler（毎朝 8:00 JST）
     → Cloud Run Job（npb-stats-job）
         ① GCS から npb.db をダウンロード
         ② python main.py --year <当年> を実行（NPB スクレイピング）
+           シーズン期間外なら main.py が EXIT_SKIPPED で終わり、ここで終了
         ③ 更新した npb.db を GCS にアップロード
         ④ Gmail SMTP で完了 / 失敗を通知（実行ログ本文つき）
 

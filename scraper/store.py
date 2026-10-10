@@ -60,6 +60,22 @@ def upsert_snapshot(conn, year: int, stats_date: str) -> int:
     return row[0]
 
 
+def get_final_dates(conn, year: int) -> dict:
+    """記録済みのリーグ別最終戦日を {'C': 'YYYY-MM-DD', ...} で返す。"""
+    rows = conn.execute(
+        "SELECT league, final_date FROM season_end WHERE year=?", (year,)
+    ).fetchall()
+    return dict(rows)
+
+
+def record_final_date(conn, year: int, league: str, final_date: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO season_end(year, league, final_date) VALUES (?, ?, ?)",
+        (year, league, final_date),
+    )
+    conn.commit()
+
+
 def _league(df: pd.DataFrame) -> str:
     """DataFrameの league 列から値を取り出す。"""
     return str(df["league"].iloc[0])

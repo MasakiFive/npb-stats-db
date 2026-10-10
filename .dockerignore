@@ -6,3 +6,4 @@ cache/
 data/
 .git/
 .gitignore
+.claude/

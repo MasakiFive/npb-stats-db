@@ -17,6 +17,38 @@ def parse_stats_date(html: str) -> str:
     return datetime(y, mo, d).date().isoformat()
 
 
+# シーズンの進行状況（parse_season_status の戻り値）
+NOT_STARTED = "not_started"
+IN_PROGRESS = "in_progress"
+FINISHED = "finished"
+
+
+def parse_season_status(html: str, year: int) -> dict:
+    """公式戦トップ（/games/{year}/）の勝敗表欄から各リーグの進行状況を返す。
+
+    勝敗表欄の見出しの <time> は、シーズン中は「8月3日現在」、レギュラーシーズン
+    終了後は「全日程終了」になる。開幕前は勝敗表欄そのものが無い。
+    戻り値: {'C': (状態, 基準日 'YYYY-MM-DD' または None), 'P': (...)}
+    """
+    soup = BeautifulSoup(html, "lxml")
+    result = {}
+    for league in ("C", "P"):
+        heading = soup.find(class_=f"league_tit_{league.lower()}")
+        if heading is None:
+            result[league] = (NOT_STARTED, None)
+            continue
+        time_tag = heading.find("time")
+        text = time_tag.get_text(strip=True) if time_tag else ""
+        m = re.fullmatch(r"(\d{1,2})月(\d{1,2})日\s*現在", text)
+        if "全日程終了" in text:
+            result[league] = (FINISHED, None)
+        elif m:
+            result[league] = (IN_PROGRESS, datetime(year, int(m[1]), int(m[2])).date().isoformat())
+        else:
+            raise ValueError(f"{league}リーグの勝敗表欄の状態を解釈できません: {text!r}")
+    return result
+
+
 def parse_standings(html: str, league: str) -> pd.DataFrame:
     """勝敗表のDataFrameを返す。"""
     # pandas 2.x では StringIO で包む必要がある

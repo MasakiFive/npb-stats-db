@@ -8,7 +8,7 @@ NPB公式サイト(npb.jp)から野球成績を取得してSQLiteに蓄積し、
 
 | コンポーネント | 内容 |
 | ------------- | ---- |
-| スクレイパー | Cloud Run Job（`npb-stats-job`）毎朝 8:00 JST 自動実行 |
+| スクレイパー | Cloud Run Job（`npb-stats-job`）毎朝 8:00 JST 自動実行。NPB公式の勝敗表欄（「◯月◯日現在」／「全日程終了」）で開幕・閉幕を判定し、取り込むのはシーズン中と閉幕翌朝だけ |
 | DB 永続化 | GCS: `gs://amplified-alpha-330603-npb-stats/npb.db` |
 | Web ビューア | Cloud Run Service（`npb-stats-web`）Google OAuth + 単一アカウント許可制 |
 | DB 自動更新 | Web サービスが毎朝 9:00 JST に GCS から最新 DB を取得 |
@@ -48,7 +48,13 @@ python main.py          # 当年を自動取得
 python main.py --year 2025  # 年を指定する場合
 ```
 
-同日に再実行しても冪等（キャッシュ利用＋上書き保存）。
+同日に再実行しても冪等（キャッシュ利用＋上書き保存）。開幕前と閉幕後（最終成績の取り込み後）は何もせず終了コード 10 で終わる。
+
+ジョブが止まっていて閉幕の検知が遅れた場合は、最終戦日を指定して補完する:
+
+```bash
+python main.py --final P=2026-10-06 --final C=2026-10-08
+```
 
 ### Web 閲覧
 
@@ -105,6 +111,7 @@ python -m pytest
 ## DB 構造
 
 - `snapshots`：取得日時のハブテーブル（全成績テーブルのFK参照元）
+- `season_end`：リーグ別のレギュラーシーズン最終戦日（閉幕後の最終成績を1回だけ取り込むための目印）
 - `team_standings` / `team_batting` / `team_pitching` / `team_fielding`：チーム成績
 - `player_batting` / `player_pitching` / `player_fielding`：個人成績
 - `season_results`：歴代シーズン優勝データ（seed.py で投入、スナップショットと独立）

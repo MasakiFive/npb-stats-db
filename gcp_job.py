@@ -1,5 +1,6 @@
 """Cloud Run Job エントリーポイント。
 GCS から DB をダウンロード → スクレイピング実行 → GCS へアップロード → メール通知。
+シーズン期間外は main.py が EXIT_SKIPPED で終わるので、アップロードも通知もしない。
 """
 import os
 import smtplib
@@ -10,6 +11,8 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 from google.cloud import storage
+
+from main import EXIT_SKIPPED
 
 BUCKET_NAME    = os.environ.get("GCS_BUCKET", "amplified-alpha-330603-npb-stats")
 GCS_DB_BLOB    = os.environ.get("GCS_DB_BLOB", "npb.db")
@@ -79,6 +82,11 @@ def main() -> None:
     print(result.stdout)
     if result.stderr:
         print(result.stderr)
+
+    if result.returncode == EXIT_SKIPPED:
+        # シーズン期間外。DB は変更されていないのでアップロードも通知もしない
+        print(f"=== NPB Stats Job スキップ（シーズン期間外）: {datetime.now(jst).isoformat()} ===")
+        return
 
     if result.returncode != 0:
         print(f"[scraper] main.py が異常終了しました (code={result.returncode})")

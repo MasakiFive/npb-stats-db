@@ -6,6 +6,15 @@ CREATE TABLE IF NOT EXISTS snapshots (
     UNIQUE(year, stats_date)
 );
 
+-- 各リーグのレギュラーシーズン最終戦日。最終成績を取り込んだ時点で記録し、
+-- 以降の実行で閉幕後の同じ成績を取り込み直さないための目印にする。
+CREATE TABLE IF NOT EXISTS season_end (
+    year        INTEGER NOT NULL,
+    league      TEXT    NOT NULL CHECK(league IN ('C','P')),
+    final_date  DATE    NOT NULL,
+    PRIMARY KEY (year, league)
+);
+
 CREATE TABLE IF NOT EXISTS team_standings (
     snapshot_id   INTEGER NOT NULL REFERENCES snapshots(id),
     league        TEXT    NOT NULL CHECK(league IN ('C','P')),

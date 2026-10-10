@@ -1,14 +1,25 @@
 """成績スクレイピングのメインスクリプト。
 
 本番では Cloud Run Job（gcp_job.py）から毎朝 8:00 JST に実行される。
+公式戦トップの勝敗表欄でシーズンの進行状況を判定し、開幕前と閉幕後
+（最終成績の取り込み後）は何もせずに終了コード EXIT_SKIPPED で終わる。
 ローカルでの手動実行:
     python main.py              # 当年を自動取得
     python main.py --year 2025  # 年を指定する場合
+    python main.py --final P=2026-10-06  # 閉幕したリーグの最終戦日を明示する場合
 """
+from __future__ import annotations  # `str | None` を Python 3.9 でも評価可能にする
+
 import argparse
-from datetime import datetime, date
+import sys
+from datetime import datetime, date, timedelta, timezone
+import requests
 from scraper.fetch import fetch
 from scraper.parse import (
+    FINISHED,
+    IN_PROGRESS,
+    NOT_STARTED,
+    parse_season_status,
     parse_stats_date,
     parse_standings,
     parse_team_batting,
@@ -24,7 +35,9 @@ from scraper.parse import (
 )
 from scraper.store import (
     get_conn,
+    get_final_dates,
     init_db,
+    record_final_date,
     upsert_snapshot,
     save_standings,
     save_team_batting,
@@ -57,6 +70,7 @@ TARGETS = [
 
 TABLES = [
     "snapshots",
+    "season_end",
     "team_standings",
     "team_batting",
     "team_pitching",
@@ -68,9 +82,62 @@ TABLES = [
     "game_pitching",
 ]
 
+# シーズン期間外で取り込みを行わなかったときの終了コード（gcp_job.py が参照する）
+EXIT_SKIPPED = 10
 
-def scrape_hawks_games(year: int, conn) -> None:
-    """ホークスの全試合ボックススコアを取得して game_batting に保存する。"""
+JST = timezone(timedelta(hours=9))
+LEAGUE_NAMES = {"C": "セ", "P": "パ"}
+
+
+def get_season_status(year: int) -> dict:
+    """公式戦トップから各リーグの進行状況を返す。ページが無ければ開幕前とみなす。"""
+    try:
+        html = fetch(f"https://npb.jp/games/{year}/")
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            return {"C": (NOT_STARTED, None), "P": (NOT_STARTED, None)}
+        raise
+    return parse_season_status(html, year)
+
+
+def plan_run(
+    status: dict,
+    final_dates: dict,
+    default_final: str,
+    final_overrides: dict | None = None,
+) -> tuple[str | None, dict]:
+    """取り込みの要否と成績基準日を決める。
+
+    status: get_season_status() の戻り値
+    final_dates: 記録済みのリーグ別最終戦日
+    default_final: 新たに閉幕を検知したリーグの最終戦日とみなす日（通常は前日）
+    final_overrides: 新たに閉幕を検知したリーグの最終戦日を明示する場合に指定
+
+    戻り値: (基準日。取り込み不要なら None, 新たに記録するリーグ別最終戦日)
+    - どちらかのリーグがシーズン中 → そのページの基準日で取り込む。閉幕済みのリーグも
+      同じスナップショットに最終成績を入れ、リーグ切替で空にならないようにする
+    - 両リーグ閉幕で、まだ最終戦日を記録していないリーグがある → 最終成績を取り込む
+    - それ以外（開幕前、または最終成績を取り込み済み）→ スキップ
+    """
+    new_finals = {
+        league: (final_overrides or {}).get(league, default_final)
+        for league, (state, _) in status.items()
+        if state == FINISHED and league not in final_dates
+    }
+    in_progress = [d for state, d in status.values() if state == IN_PROGRESS]
+    if in_progress:
+        return max(in_progress), new_finals
+    if new_finals:
+        return max({**final_dates, **new_finals}.values()), new_finals
+    return None, {}
+
+
+def scrape_hawks_games(year: int, conn, until: str | None = None) -> None:
+    """ホークスの全試合ボックススコアを取得して game_batting に保存する。
+
+    until を渡すとその日より後の試合は取得しない。パ・リーグ閉幕後に日程ページへ
+    載るポストシーズンの試合を、公式戦として取り込まないために使う。
+    """
     today = date.today().isoformat()
     batting_dates = {
         r[0] for r in conn.execute(
@@ -97,6 +164,8 @@ def scrape_hawks_games(year: int, conn) -> None:
         for game in games:
             if game["game_date"] > today:
                 continue  # 未来の試合はスキップ
+            if until and game["game_date"] > until:
+                continue  # 閉幕後（ポストシーズン）の試合はスキップ
             if game["game_date"] in existing_dates:
                 continue  # 取得済みはスキップ
             try:
@@ -123,13 +192,34 @@ def scrape_hawks_games(year: int, conn) -> None:
     print(f"[ホークス] 打撃成績 新規追加 {total} 行")
 
 
-def run(year: int) -> None:
+def run(year: int, today: date, final_overrides: dict | None = None) -> bool:
+    """成績を取り込む。シーズン期間外で何もしなかった場合は False を返す。
+
+    final_overrides: 新たに閉幕を検知したリーグの最終戦日を {'P': 'YYYY-MM-DD'} で指定する。
+    未指定のリーグは前日を最終戦日とみなす（毎日実行していれば閉幕翌朝に検知するため）。
+    """
     init_db()
     with get_conn() as conn:
+        status = get_season_status(year)
+        print("[season] " + " / ".join(
+            f"{LEAGUE_NAMES[lg]}: {state}" + (f" ({d})" if d else "")
+            for lg, (state, d) in status.items()
+        ))
+        final_dates = get_final_dates(conn, year)
+        yesterday = (today - timedelta(days=1)).isoformat()
+        run_date, new_finals = plan_run(status, final_dates, yesterday, final_overrides)
+        if run_date is None:
+            print(f"[season] {year}年はシーズン期間外（開幕前、または最終成績を取り込み済み）のためスキップ")
+            return False
+
         for league, path, parse_fn, save_fn, label in TARGETS:
             url = f"https://npb.jp/bis/{year}/stats/{path}.html"
             html = fetch(url)
-            stats_date = parse_stats_date(html)
+            if status[league][0] == FINISHED:
+                # 閉幕後のページは「◯月◯日 現在」の表記が消える
+                stats_date = run_date
+            else:
+                stats_date = parse_stats_date(html)
             # FK制約のため snapshot を先にコミットしてから子テーブルへINSERT
             snapshot_id = upsert_snapshot(conn, year, stats_date)
             df = parse_fn(html, league)
@@ -137,16 +227,34 @@ def run(year: int) -> None:
             print(f"[OK] {league}リーグ {label} ({stats_date}) -> {len(df)} 行")
 
         print("\n[ホークス] 試合別打撃成績を取得中...")
-        scrape_hawks_games(year, conn)
+        scrape_hawks_games(year, conn, until={**final_dates, **new_finals}.get("P"))
+
+        # 取り込みが最後まで成功してから記録する（途中で失敗したら翌日やり直す）
+        for league, final_date in new_finals.items():
+            record_final_date(conn, year, league, final_date)
+            print(f"[season] {LEAGUE_NAMES[league]}・リーグ閉幕: 最終戦日 {final_date} として最終成績を記録")
 
         print("\n--- テーブル別行数 ---")
         for table in TABLES:
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             print(f"  {table:<25} {count:>5} 行")
+    return True
+
+
+def _parse_final_arg(value: str) -> tuple[str, str]:
+    league, _, final_date = value.partition("=")
+    if league not in LEAGUE_NAMES:
+        raise argparse.ArgumentTypeError(f"リーグは C か P: {value}")
+    return league, date.fromisoformat(final_date).isoformat()
 
 
 if __name__ == "__main__":
+    today = datetime.now(JST).date()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--year", type=int, default=datetime.now().year)
+    parser.add_argument("--year", type=int, default=today.year)
+    parser.add_argument("--final", type=_parse_final_arg, action="append", default=[],
+                        metavar="LEAGUE=YYYY-MM-DD",
+                        help="閉幕したリーグの最終戦日（未指定なら前日とみなす）")
     args = parser.parse_args()
-    run(args.year)
+    if not run(args.year, today, dict(args.final)):
+        sys.exit(EXIT_SKIPPED)

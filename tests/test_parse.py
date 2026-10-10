@@ -8,6 +8,9 @@ import pandas as pd
 import pytest
 
 from scraper.parse import (
+    FINISHED,
+    IN_PROGRESS,
+    NOT_STARTED,
     TEAM_CODE_MAP,
     _extract_rank,
     _parse_innings,
@@ -19,6 +22,7 @@ from scraper.parse import (
     parse_player_fielding,
     parse_player_pitching,
     parse_schedule_game_urls,
+    parse_season_status,
     parse_standings,
     parse_stats_date,
     parse_team_batting,
@@ -251,6 +255,27 @@ def test_parse_schedule_game_urls(html):
 def test_parse_schedule_game_urls_no_hawks():
     html_str = '<a href="/scores/2026/0405/g-t-01/">巨人-阪神</a>'
     assert parse_schedule_game_urls(html_str, 2026) == []
+
+
+# --- シーズン進行状況 ---
+
+def test_parse_season_status(html):
+    status = parse_season_status(html("games_top.html"), 2026)
+    assert status == {"C": (IN_PROGRESS, "2026-10-07"), "P": (FINISHED, None)}
+
+
+def test_parse_season_status_not_started():
+    """開幕前のページには勝敗表欄が無い。"""
+    assert parse_season_status("<html><h4>試合日程</h4></html>", 2027) == {
+        "C": (NOT_STARTED, None), "P": (NOT_STARTED, None),
+    }
+
+
+def test_parse_season_status_unknown_text_raises(html):
+    """表記が変わったら黙ってシーズン外扱いにせず失敗させる。"""
+    changed = html("games_top.html").replace("10月7日現在", "まもなく開幕")
+    with pytest.raises(ValueError, match="勝敗表欄"):
+        parse_season_status(changed, 2026)
 
 
 def test_team_code_map_covers_12_teams():
